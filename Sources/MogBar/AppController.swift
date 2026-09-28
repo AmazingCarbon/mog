@@ -16,12 +16,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let forgetItem = NSMenuItem(title: "Forget My Face", action: #selector(forget), keyEquivalent: "")
     private let photoItem = NSMenuItem(title: "Show Intruder Photo on Lock Screen", action: #selector(togglePhoto),
                                        keyEquivalent: "")
+    private let inputItem = NSMenuItem(title: "Lock on Typing When Nobody’s There", action: #selector(toggleInput),
+                                       keyEquivalent: "")
     private let intrudersItem = NSMenuItem(title: "Open Intruder Photos", action: #selector(openIntruders),
                                            keyEquivalent: "")
     private static let photoDefaultsKey = "showIntruderPhoto"
+    private static let inputDefaultsKey = "lockOnUnseenInput"
     private var photoOnLock: Bool {
         get { UserDefaults.standard.bool(forKey: Self.photoDefaultsKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.photoDefaultsKey) }
+    }
+    /// On unless the user turned it off.
+    private var inputLock: Bool {
+        get { UserDefaults.standard.object(forKey: Self.inputDefaultsKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.inputDefaultsKey) }
     }
 
     private var embedder: FaceEmbedder?
@@ -42,13 +50,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
         for item in [statusLine, detailLine] { item.isEnabled = false }
-        for item in [toggleItem, enrollItem, forgetItem, photoItem, intrudersItem] { item.target = self }
+        for item in [toggleItem, enrollItem, forgetItem, inputItem, photoItem, intrudersItem] { item.target = self }
+        inputItem.toolTip = "A key press or click while nobody is in front of the camera locks the Mac, "
+            + "once you've been away for 5 seconds."
         menu.autoenablesItems = false
         menu.delegate = self
         menu.items = [
             statusLine, detailLine, .separator(),
             toggleItem, .separator(),
-            photoItem, intrudersItem, .separator(),
+            inputItem, photoItem, intrudersItem, .separator(),
             enrollItem, forgetItem, .separator(),
             NSMenuItem(title: "Quit Mog", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"),
         ]
@@ -80,7 +90,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let profile else { enroll(); return }
         guard let embedder else { return }
         let session = WatchSession(profile: profile, thresholds: profile.thresholds, grace: Guard.defaultGrace,
-                                   dryRun: false, armDelay: 3, analyzer: FaceAnalyzer(embedder: embedder))
+                                   dryRun: false, armDelay: 3, inputLock: inputLock,
+                                   analyzer: FaceAnalyzer(embedder: embedder))
         session.capturePhoto = photoOnLock
         if photoOnLock {
             session.beforeLock = { jpeg in
@@ -139,6 +150,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
+    @objc private func toggleInput() {
+        inputLock.toggle()
+        if watch != nil { lastDetail = "Turn Mog off and on for this to take effect" }
+        refresh()
+    }
+
     @objc private func openIntruders() {
         try? FileManager.default.createDirectory(at: IntruderPhoto.directory, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
@@ -168,14 +185,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .cancelWarning:
             warning.hide()
         case .startWarning, .none:
-            if let left = tick.secondsLeft { warning.show(secondsLeft: left) }
+            if let left = tick.secondsLeft { warning.show(secondsLeft: left, reason: tick.reason ?? .stranger) }
         }
 
         let labels = tick.labels.compactMap { $0 }
         if case .off = tick.state {
             lastDetail = "Arming…"
-        } else if tick.secondsLeft != nil {
-            lastDetail = String(format: "Stranger in view. Locking in %.0f s", (tick.secondsLeft ?? 0).rounded(.up))
+        } else if let left = tick.secondsLeft {
+            let what = tick.reason == .unseenInput ? "Typing with nobody in view" : "Stranger in view"
+            lastDetail = String(format: "%@. Locking in %.0f s", what, left.rounded(.up))
         } else if labels.contains(where: { $0.0 == .owner }) {
             lastDetail = String(format: "You're here (match %.2f)", labels.map(\.1).max() ?? 0)
         } else if tick.faces.isEmpty {
@@ -215,6 +233,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         enrollItem.isEnabled = enrollSession == nil
         forgetItem.isHidden = !hasProfile
         photoItem.state = photoOnLock ? .on : .off
+        inputItem.state = inputLock ? .on : .off
         intrudersItem.isHidden = IntruderPhoto.all().isEmpty
     }
 

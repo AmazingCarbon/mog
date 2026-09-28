@@ -1,8 +1,28 @@
 import AVFoundation
+import CoreGraphics
 import CoreImage
 import CoreVideo
 import Foundation
 import MogCore
+
+/// When the last key press or mouse click happened, from the system's own idle counters.
+/// Reads timestamps only, never which key: no Input Monitoring or Accessibility permission needed.
+public enum InputActivity {
+    private static let types: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+
+    /// Seconds since the most recent key press, modifier change or mouse click.
+    /// Mouse movement and scrolling don't count: a bump or a cat shouldn't lock the Mac.
+    public static var secondsSinceLastInput: Double {
+        types.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? .infinity
+    }
+
+    /// The same, as an instant on the Guard's clock.
+    public static func lastInput(now: ContinuousClock.Instant = .now) -> ContinuousClock.Instant? {
+        let s = secondsSinceLastInput
+        guard s.isFinite, s >= 0, s < 7 * 24 * 3600 else { return nil }
+        return now - .milliseconds(Int(s * 1000))
+    }
+}
 
 /// What happened in one analyzed frame of a watch session. Delivered on the camera queue.
 public struct WatchTick {
@@ -12,6 +32,8 @@ public struct WatchTick {
     public let observation: Observation
     public let action: GuardAction
     public let state: GuardState
+    /// Why the countdown is running (nil when not warning).
+    public let reason: WarningReason?
     /// Seconds until lock while warning.
     public let secondsLeft: Double?
     /// True if this tick requested the real screen lock.
@@ -48,15 +70,18 @@ public final class WatchSession {
     private let armAt: Date
 
     public init(profile: Profile, thresholds: MatchThresholds, grace: Duration, dryRun: Bool,
-                armDelay: TimeInterval, analyzer: FaceAnalyzer, camera: Camera = Camera()) {
+                armDelay: TimeInterval, inputLock: Bool = false, analyzer: FaceAnalyzer,
+                camera: Camera = Camera()) {
         self.profile = profile
         self.thresholds = thresholds
         self.dryRun = dryRun
         self.analyzer = analyzer
         self.camera = camera
-        self.guardian = Guard(grace: grace)
+        self.guardian = Guard(grace: grace, inputLock: inputLock)
         self.armAt = Date().addingTimeInterval(armDelay)
     }
+
+    public var inputLock: Bool { guardian.inputLock }
 
     public func start() throws {
         if !dryRun && !ScreenLock.isAvailable { throw EngineError.lockUnavailable }
@@ -72,7 +97,7 @@ public final class WatchSession {
     private func process(_ frame: CVPixelBuffer) {
         // Never analyze behind the lock screen: no camera decisions, no re-locking.
         if ScreenLock.isScreenLocked { return }
-        if guardian.state == .off && Date() >= armAt { guardian.arm() }
+        if guardian.state == .off && Date() >= armAt { guardian.arm(at: .now) }
 
         let faces = analyzer.analyze(frame)
         let labels: [(MatchThresholds.Label, Float)?] = faces.map { f in
@@ -84,8 +109,10 @@ public final class WatchSession {
         let verdicts = zip(faces, labels).map { FaceVerdict(usable: $0.usable, similarity: $1?.1) }
         let obs = Classifier.observe(verdicts, thresholds: thresholds)
         let now = ContinuousClock.now
-        let action = guardian.observe(obs, at: now)
+        let lastInput = guardian.inputLock ? InputActivity.lastInput(now: now) : nil
+        let action = guardian.observe(obs, at: now, lastInput: lastInput)
         let stateBefore = guardian.state
+        let reason = guardian.warningReason
         let left = guardian.remaining(at: now).map {
             Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18
         }
@@ -95,7 +122,7 @@ public final class WatchSession {
         if action == .lock {
             if capturePhoto { photo = Self.jpeg(from: frame) }
             if dryRun {
-                guardian.arm()  // keep demonstrating; nothing is locked
+                guardian.arm(at: .now)  // keep demonstrating; nothing is locked
             } else {
                 camera.stop()
                 if let beforeLock {
@@ -109,7 +136,8 @@ public final class WatchSession {
             }
         }
         onTick?(WatchTick(faces: faces, labels: labels, observation: obs, action: action,
-                          state: stateBefore, secondsLeft: left, locked: locked, intruderJPEG: photo))
+                          state: stateBefore, reason: reason, secondsLeft: left, locked: locked,
+                          intruderJPEG: photo))
         if locked { camera.onFrame = nil }
     }
 }

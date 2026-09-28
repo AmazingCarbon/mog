@@ -112,6 +112,88 @@ do {
     check(g.observe(.empty, at: at(1.2)) == .cancelWarning, "1 s: stranger gone >1 s cancels")
 }
 
+// MARK: Guard — key press or click while nobody is in view.
+
+/// Armed at t=0, owner seen from 0 to 1 s, then gone.
+func ownerLeftAt1s() -> Guard {
+    var g = Guard(inputLock: true); g.arm(at: at(0))
+    _ = g.observe(.owner, at: at(0.5))
+    _ = g.observe(.owner, at: at(1))
+    _ = g.observe(.empty, at: at(1.5))
+    return g
+}
+do {
+    var g = Guard(inputLock: false); g.arm(at: at(0))
+    _ = g.observe(.owner, at: at(1))
+    check(g.observe(.empty, at: at(20), lastInput: at(19.9)) == .none, "input: off means input never locks")
+}
+do {
+    var g = ownerLeftAt1s()
+    check(g.observe(.empty, at: at(20), lastInput: at(19.9)) == .startWarning, "input: key press in an empty room warns")
+    check(g.warningReason == .unseenInput, "input: warning says why")
+    check(g.observe(.empty, at: at(20.5)) == .none, "input: no lock before grace")
+    check(g.observe(.empty, at: at(21), lastInput: at(19.9)) == .lock, "input: locks after 1 s")
+    check(g.state == .locked, "input: lock disarms")
+}
+do {
+    // Owner typing, then walking away: the last keystrokes are within 5 s of being seen.
+    var g = ownerLeftAt1s()
+    for s in stride(from: 1.5, through: 60, by: 0.25) {
+        check(g.observe(.empty, at: at(s), lastInput: at(4.9)) == .none, "input: owner's typing while leaving never locks (t=\(s))")
+    }
+}
+do {
+    var g = ownerLeftAt1s()
+    check(g.observe(.empty, at: at(6.5), lastInput: at(6.0)) == .startWarning, "input: first key 5 s after owner left warns")
+}
+do {
+    // Owner glancing down at the keyboard: face gone for a moment while typing.
+    var g = Guard(inputLock: true); g.arm(at: at(0))
+    for s in stride(from: 0.25, through: 30, by: 0.25) {
+        let obs: Observation = Int(s * 4) % 12 < 8 ? .owner : .empty   // 2 s of face, 1 s looking down
+        check(g.observe(obs, at: at(s), lastInput: at(s - 0.1)) != .startWarning,
+              "input: owner looking down while typing never warns (t=\(s))")
+    }
+}
+do {
+    // Input from before arming (e.g. the click on Turn On) never counts.
+    var g = Guard(inputLock: true); g.arm(at: at(10))
+    _ = g.observe(.owner, at: at(1))
+    check(g.observe(.empty, at: at(20), lastInput: at(9)) == .none, "input: keys before arming ignored")
+}
+do {
+    // Never saw the owner this session (armed while away): Mog can't tell whose hands those are.
+    var g = Guard(inputLock: true); g.arm(at: at(0))
+    check(g.observe(.empty, at: at(10), lastInput: at(9)) == .none, "input: needs to have seen the owner first")
+}
+do {
+    var g = ownerLeftAt1s()
+    check(g.observe(.unclear, at: at(20), lastInput: at(19.9)) == .none, "input: unclear face is not 'nobody'")
+    check(g.observe(stranger, at: at(20.25), lastInput: at(19.9)) == .startWarning, "input: stranger still handled by face rule")
+    check(g.warningReason == .stranger, "input: stranger reason wins when a face is visible")
+}
+do {
+    var g = ownerLeftAt1s()
+    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
+    check(g.observe(.owner, at: at(20.5), lastInput: at(19.9)) == .cancelWarning, "input: owner coming back cancels")
+    check(g.observe(.empty, at: at(21), lastInput: at(19.9)) == .none, "input: same key press can't warn twice")
+    check(g.observe(.empty, at: at(23), lastInput: at(22.5)) == .none, "input: owner seen 2 s ago, fresh typing is theirs")
+    check(g.observe(.empty, at: at(40), lastInput: at(39)) == .startWarning, "input: later key press warns again")
+}
+do {
+    // Warning from input keeps running even if the room stays empty (the input was the evidence).
+    var g = ownerLeftAt1s()
+    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
+    check(g.observe(.unclear, at: at(20.5)) == .none, "input: unclear frame doesn't cancel input warning")
+    check(g.observe(.empty, at: at(21)) == .lock, "input: empty room still locks")
+}
+do {
+    var g = ownerLeftAt1s()
+    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
+    g.disarm()
+    check(g.observe(.empty, at: at(30), lastInput: at(29.9)) == .none, "input: disarm stops it")
+}
+
 // MARK: Classifier — turning faces into an observation.
 
 let th = MatchThresholds(owner: 0.40, stranger: 0.33)
