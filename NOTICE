@@ -1,0 +1,14 @@
+Mog
+Copyright 2026 Niranchan
+
+This product includes no third-party code.
+
+At install time Mog downloads, and at run time it uses, the following model:
+
+  ArcFace LResNet100E-IR (arcfaceresnet100-8), from the ONNX Model Zoo
+  https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface
+  Licensed under the Apache License, Version 2.0.
+
+  Core ML conversion by RuiSumida:
+  https://huggingface.co/RuiSumida/ArcFace-R100-CoreML
+  Licensed under the Apache License, Version 2.0.

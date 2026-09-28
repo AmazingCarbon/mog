@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+.DS_Store
+Models/
+# Local agent state; not part of the project.
+knowledge/
+.pi/
