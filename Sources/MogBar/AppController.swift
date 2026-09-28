@@ -14,6 +14,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let toggleItem = NSMenuItem(title: "", action: #selector(toggle), keyEquivalent: "")
     private let enrollItem = NSMenuItem(title: "", action: #selector(enroll), keyEquivalent: "")
     private let forgetItem = NSMenuItem(title: "Forget My Face", action: #selector(forget), keyEquivalent: "")
+    private let quitItem = NSMenuItem(title: "Quit Mog", action: #selector(requestQuit), keyEquivalent: "q")
     private let photoItem = NSMenuItem(title: "Show Intruder Photo on Lock Screen", action: #selector(togglePhoto),
                                        keyEquivalent: "")
     private let inputItem = NSMenuItem(title: "Lock on Typing When Nobody’s There", action: #selector(toggleInput),
@@ -38,6 +39,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var enrollWindow: EnrollWindow?
     private let warning = WarningPanel()
     private var lastDetail = ""
+    /// When Turn Off / Quit was last refused (owner not in view). Cleared on unlock.
+    private var refusedAt: Date?
 
     private var profile: Profile? {
         guard let p = try? ProfileStore.load(), (try? p.validate(expectedModel: FaceEmbedder.modelID)) != nil
@@ -60,9 +63,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             toggleItem, .separator(),
             inputItem, photoItem, intrudersItem, .separator(),
             enrollItem, forgetItem, .separator(),
-            NSMenuItem(title: "Quit Mog", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"),
+            quitItem,
         ]
         statusItem.menu = menu
+        quitItem.target = self
 
         do { embedder = try FaceEmbedder() } catch { fatalSetup("\(error)") }
         // A previous lock swapped the wallpaper and Mog quit before you unlocked: put it back.
@@ -73,6 +77,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(screenUnlocked),
             name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
+
+        // Test hook: MOG_AUTOSTART=1 turns the guard on at launch (used by the gate test).
+        if ProcessInfo.processInfo.environment["MOG_AUTOSTART"] == "1" { toggle() }
     }
 
     func applicationWillTerminate(_ note: Notification) {
@@ -86,7 +93,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Actions
 
     @objc private func toggle() {
-        if watch != nil { stopWatching(reason: "Off"); return }
+        if watch != nil {
+            guard ownerApproves() else { return }
+            stopWatching(reason: "Off")
+            return
+        }
         guard let profile else { enroll(); return }
         guard let embedder else { return }
         let session = WatchSession(profile: profile, thresholds: profile.thresholds, grace: Guard.defaultGrace,
@@ -110,6 +121,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try session.start()
             watch = session
             lastDetail = "Arming in 3 s…"
+            // While guarding, show in the Dock too: right-click there reaches Turn Off / Quit even when
+            // the menu-bar icon is hidden behind the notch or other items.
+            NSApp.setActivationPolicy(.regular)
         } catch {
             alert("Mog can't start watching", "\(error)")
         }
@@ -118,6 +132,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func enroll() {
         guard let embedder else { return }
+        guard ownerApproves() else { return }
         stopWatching(reason: "Off")
         enrollSession?.stop()
         let session = EnrollSession(target: 12, threshold: 0.40, strangerBelow: nil,
@@ -139,6 +154,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func forget() {
+        guard ownerApproves() else { return }
         stopWatching(reason: "Off")
         do { try ProfileStore.delete() } catch { alert("Could not delete profile", "\(error)") }
         refresh()
@@ -163,6 +179,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func screenUnlocked() {
+        refusedAt = nil
         let restored = IntruderPhoto.needsRestore && IntruderPhoto.restoreWallpaper()
         if watch == nil && profile != nil {
             lastDetail = restored
@@ -209,7 +226,69 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watch = nil
         warning.hide()
         lastDetail = reason
+        NSApp.setActivationPolicy(.accessory)
         refresh()
+    }
+
+    // MARK: Owner gate
+
+    /// While watching, Turn Off and Quit only work with the owner in front of the camera.
+    /// Anyone else trying gets the Mac locked instead (and Mog switches off, as after any lock).
+    /// Returns true if the action may go ahead.
+    private func ownerApproves() -> Bool {
+        // A refused attempt locked the Mac a moment ago; macOS may re-ask right away. Keep refusing
+        // until someone unlocks, so the refusal can't be turned into a quit by asking twice.
+        if refusedAt.map({ Date().timeIntervalSince($0) < 5 }) == true { return false }
+        guard let watch else { return true }
+        if watch.ownerSeen() { return true }
+        refusedAt = Date()
+        warning.hide()
+        let locked = watch.lockNow()
+        self.watch = nil
+        NSApp.setActivationPolicy(.accessory)
+        lastDetail = locked ? "Locked: you weren't in view when Mog was switched off." : "Lock failed. Off."
+        refresh()
+        if !locked { alert("Mog could not lock the screen", "The macOS lock call failed.") }
+        return false
+    }
+
+    @objc private func requestQuit() {
+        guard ownerApproves() else { return }
+        NSApp.terminate(nil)
+    }
+
+    /// ⌘Q, Dock → Quit, logout and shutdown all come here. Logout/shutdown/restart are always allowed.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // The quit Apple Event carries its reason in the 'why?' parameter (kAEQuitReason).
+        let reason = NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue
+        let systemQuit = [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog,
+                          kAERestart, kAEShutDown].map { OSType($0) }
+        if let reason, systemQuit.contains(reason) { return .terminateNow }
+        return ownerApproves() ? .terminateNow : .terminateCancel
+    }
+
+    // MARK: Dock menu (right-click the Dock icon while watching)
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let dock = NSMenu()
+        let status = NSMenuItem(title: detailLine.title, action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        dock.addItem(status)
+        dock.addItem(.separator())
+        let toggle = NSMenuItem(title: watch != nil ? "Turn Off" : "Turn On", action: #selector(self.toggle),
+                                keyEquivalent: "")
+        toggle.target = self
+        toggle.isEnabled = enrollSession == nil
+        dock.addItem(toggle)
+        // macOS adds its own Quit below; that goes through applicationShouldTerminate, same gate.
+        return dock
+    }
+
+    /// Clicking the Dock icon opens the menu-bar menu, since Mog has no window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        statusItem.button?.performClick(nil)
+        return false
     }
 
     // MARK: UI

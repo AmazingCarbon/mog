@@ -45,6 +45,7 @@ Homebrew builds Mog from source with the Command Line Tools in about a minute. I
 | 🔴 **Warns first** | A red banner with a countdown shows on every screen before it locks. |
 | 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. Your wallpaper comes back when you unlock. |
 | 🔁 **No lock loops** | After locking, Mog switches itself off. You turn it back on; it never re-arms behind your back. |
+| 🛡️ **Only you can switch it off** | While Mog is watching, Turn Off, Quit, Re-enroll and Forget only work with you in front of the camera. Anyone else trying locks the Mac instead. |
 | 🔒 **Private by design** | No images are stored for your profile, only 512 numbers per sample. No network, no accounts, no telemetry. |
 
 ## How it works
@@ -72,6 +73,8 @@ camera ──► Vision finds faces ──► align to 112×112 ──► ArcFac
 The eye in your menu bar is the whole interface:
 
 - **Turn On / Turn Off.** It arms 3 seconds after you turn it on.
+- **Dock icon while watching.** The Mog icon appears in the Dock whenever it's guarding. Right-click it for Turn Off and Quit, even if the menu-bar icon is hidden behind the notch.
+- **You have to be there to switch it off.** While watching, Turn Off and Quit work only if Mog has seen you in the last 2 seconds, from the menu bar, the Dock or ⌘Q. Otherwise the Mac locks instead, and Mog switches itself off as after any lock. Logging out and shutting down are never blocked.
 - **Status line.** Shows what Mog sees right now: *You're here (match 0.91)*, *Nobody in view*, or *Stranger in view. Locking in 1 s*.
 - **Enroll My Face…** Opens a live camera preview. Look at the screen and move your head slightly; it takes about 10 seconds.
 - **Show Intruder Photo on Lock Screen.** Off by default. **Open Intruder Photos** browses the saved ones.
@@ -132,7 +135,7 @@ git clone https://github.com/c4rb0nx1/mog && cd mog
 ./Scripts/fetch-model.sh     # 110 MB model, SHA-256 checked, compiled locally
 swift build -c release       # CLI: .build/release/mog
 ./Scripts/build-app.sh       # app: .build/Mog.app, model included
-swift run MogChecks          # 437 checks covering lock rules, matching, alignment, storage
+swift run MogChecks          # 444 checks covering lock rules, matching, alignment, storage
 ```
 
 | Directory | Contents |

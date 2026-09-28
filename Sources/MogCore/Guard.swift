@@ -172,6 +172,12 @@ public struct Guard: Sendable {
         }
     }
 
+    /// True if the owner was in frame within `window` before `now` (only while armed).
+    public func ownerSeen(within window: Duration, at now: ContinuousClock.Instant) -> Bool {
+        guard isArmed, let ownerAt = lastOwnerAt else { return false }
+        return now - ownerAt <= window
+    }
+
     /// The pending input, if it counts as someone using the Mac while nobody is in view.
     private func unseenInput(_ obs: Observation, lastInput: ContinuousClock.Instant?) -> ContinuousClock.Instant? {
         guard inputLock, obs == .empty, let input = lastInput, let armedAt, input > armedAt,

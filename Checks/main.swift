@@ -194,6 +194,27 @@ do {
     check(g.observe(.empty, at: at(30), lastInput: at(29.9)) == .none, "input: disarm stops it")
 }
 
+// MARK: Guard — owner gate for Turn Off / Quit.
+
+do {
+    var g = Guard(); g.arm(at: at(0))
+    check(!g.ownerSeen(within: .seconds(2), at: at(1)), "gate: owner never seen → refuse")
+    _ = g.observe(.owner, at: at(10))
+    check(g.ownerSeen(within: .seconds(2), at: at(11)), "gate: owner seen 1 s ago → allow")
+    check(g.ownerSeen(within: .seconds(2), at: at(12)), "gate: exactly at window edge → allow")
+    check(!g.ownerSeen(within: .seconds(2), at: at(12.5)), "gate: owner gone 2.5 s → refuse")
+    _ = g.observe(strangerWithOwner, at: at(20))
+    check(g.ownerSeen(within: .seconds(2), at: at(20.5)), "gate: owner with someone behind → allow")
+    _ = g.observe(stranger, at: at(30))
+    check(!g.ownerSeen(within: .seconds(2), at: at(30.5)), "gate: stranger alone → refuse")
+}
+do {
+    var g = Guard(); g.arm(at: at(0))
+    _ = g.observe(.owner, at: at(1))
+    g.disarm()
+    check(!g.ownerSeen(within: .seconds(2), at: at(1.5)), "gate: not armed → nothing to gate")
+}
+
 // MARK: Classifier — turning faces into an observation.
 
 let th = MatchThresholds(owner: 0.40, stranger: 0.33)

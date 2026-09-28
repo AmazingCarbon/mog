@@ -83,6 +83,29 @@ public final class WatchSession {
 
     public var inputLock: Bool { guardian.inputLock }
 
+    /// True if the owner was in front of the camera within `window`. Used to gate Turn Off and Quit:
+    /// while watching, only the owner can switch Mog off. Anyone else trying gets the Mac locked.
+    /// Still arming (the first 3 s after Turn On) counts as allowed: nothing is guarded yet.
+    public func ownerSeen(within window: Duration = WatchSession.ownerGateWindow) -> Bool {
+        let now = ContinuousClock.now
+        return queue.sync { guardian.state == .off || guardian.ownerSeen(within: window, at: now) }
+    }
+
+    public static let ownerGateWindow: Duration = .seconds(2)
+
+    /// Locks the screen right now (Turn Off or Quit attempted without the owner in view).
+    /// Disarms the guard first, so nothing re-locks afterwards. Returns true if the lock call succeeded.
+    @discardableResult
+    public func lockNow() -> Bool {
+        queue.sync { guardian.disarm() }
+        camera.stop()
+        camera.onFrame = nil
+        return dryRun ? false : ScreenLock.lock()
+    }
+
+    /// Guards `guardian`, which the camera queue mutates, against reads from the main thread.
+    private let queue = DispatchQueue(label: "mog.watch.state")
+
     public func start() throws {
         if !dryRun && !ScreenLock.isAvailable { throw EngineError.lockUnavailable }
         camera.onFrame = { [weak self] frame in self?.process(frame) }
@@ -97,7 +120,6 @@ public final class WatchSession {
     private func process(_ frame: CVPixelBuffer) {
         // Never analyze behind the lock screen: no camera decisions, no re-locking.
         if ScreenLock.isScreenLocked { return }
-        if guardian.state == .off && Date() >= armAt { guardian.arm(at: .now) }
 
         let faces = analyzer.analyze(frame)
         let labels: [(MatchThresholds.Label, Float)?] = faces.map { f in
@@ -110,10 +132,12 @@ public final class WatchSession {
         let obs = Classifier.observe(verdicts, thresholds: thresholds)
         let now = ContinuousClock.now
         let lastInput = guardian.inputLock ? InputActivity.lastInput(now: now) : nil
-        let action = guardian.observe(obs, at: now, lastInput: lastInput)
-        let stateBefore = guardian.state
-        let reason = guardian.warningReason
-        let left = guardian.remaining(at: now).map {
+        let (action, stateBefore, reason, remaining): (GuardAction, GuardState, WarningReason?, Duration?) = queue.sync {
+            if guardian.state == .off && Date() >= armAt { guardian.arm(at: now) }
+            let a = guardian.observe(obs, at: now, lastInput: lastInput)
+            return (a, guardian.state, guardian.warningReason, guardian.remaining(at: now))
+        }
+        let left = remaining.map {
             Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18
         }
 
@@ -122,7 +146,7 @@ public final class WatchSession {
         if action == .lock {
             if capturePhoto { photo = Self.jpeg(from: frame) }
             if dryRun {
-                guardian.arm(at: .now)  // keep demonstrating; nothing is locked
+                queue.sync { guardian.arm(at: .now) }  // keep demonstrating; nothing is locked
             } else {
                 camera.stop()
                 if let beforeLock {
