@@ -3,7 +3,7 @@ import CoreVideo
 import Foundation
 
 public enum MogInfo {
-    public static let version = "0.1.0"
+    public static let version = "0.1.1"
     public static let bundleID = "io.github.c4rb0nx1.mog"
 }
 
@@ -46,11 +46,26 @@ public enum AppInstaller {
         public let modelPath: String
     }
 
+    /// `AppIcon.icns`: in Homebrew's `share/mog/`, or `Assets/` in a source checkout.
+    public static func locateIcon(near executable: URL) -> URL? {
+        let fm = FileManager.default
+        var dir = executable.resolvingSymlinksInPath().deletingLastPathComponent()
+        var candidates = [dir.deletingLastPathComponent().appendingPathComponent("share/mog/AppIcon.icns")]
+        for _ in 0..<5 {
+            candidates.append(dir.appendingPathComponent("Assets/AppIcon.icns"))
+            dir = dir.deletingLastPathComponent()
+        }
+        candidates.append(URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("Assets/AppIcon.icns"))
+        return candidates.first { fm.fileExists(atPath: $0.path) }
+    }
+
     /// - Parameters:
     ///   - bar: the built MogBar executable.
     ///   - model: the compiled face model.
+    ///   - icon: `AppIcon.icns`, copied into the app if present.
     ///   - embedModel: copy the model (~125 MB) into the app instead of pointing at it.
-    public static func install(bar: URL, model: URL, into directory: URL, embedModel: Bool) throws -> Result {
+    public static func install(bar: URL, model: URL, icon: URL? = nil, into directory: URL,
+                               embedModel: Bool) throws -> Result {
         let fm = FileManager.default
         let app = directory.appendingPathComponent("Mog.app")
         let contents = app.appendingPathComponent("Contents")
@@ -72,6 +87,10 @@ public enum AppInstaller {
             "NSCameraUsageDescription":
                 "Mog checks, on this Mac only, whether the face in front of the screen is yours. Nothing is sent anywhere.",
         ]
+        if let icon {
+            try fm.copyItem(at: icon, to: contents.appendingPathComponent("Resources/AppIcon.icns"))
+            plist["CFBundleIconFile"] = "AppIcon"
+        }
         let modelPath: String
         if embedModel {
             let dst = contents.appendingPathComponent("Resources/FaceEmbedding.mlmodelc")

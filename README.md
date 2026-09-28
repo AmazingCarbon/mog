@@ -1,96 +1,143 @@
-# Mog
+<p align="center">
+  <img src="Assets/icon-512.png" width="160" alt="Mog app icon">
+</p>
 
-Locks your Mac when someone else looks at it while you're away. Runs fully offline, on Apple Silicon Macs (macOS 14+).
+<h1 align="center">Mog</h1>
+
+<p align="center">
+  <b>Locks your Mac the moment someone else looks at it.</b><br>
+  Offline face recognition in your menu bar. Nothing leaves your Mac.
+</p>
+
+<p align="center">
+  <a href="https://github.com/c4rb0nx1/mog/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/c4rb0nx1/mog?label=version&color=2e5d52"></a>
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-2e5d52">
+  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-native-2e5d52">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2e5d52"></a>
+</p>
+
+---
+
+You step away for coffee. A colleague leans over your laptop. About a second later the screen locks, and if you want, their face is waiting on the lock screen when you come back.
+
+Walking away never locks. Only a face that isn't yours does.
 
 ## Install
 
 ```bash
 brew install c4rb0nx1/tap/mog
-mog install-app          # optional: the menu-bar app, into ~/Applications
+mog install-app
 ```
 
-The formula builds from source with the Xcode Command Line Tools and downloads the ~110 MB face model once. The model is pinned by checksum and compiled locally.
+Open **Mog** from `~/Applications`, choose **Enroll My Face…**, then **Turn On** before you leave.
+
+Homebrew builds Mog from source with the Command Line Tools in about a minute. It downloads the 110 MB face model once, checks it against a pinned SHA-256, and compiles it for your Mac. After that, Mog never touches the network.
+
+## What it does
+
+| | |
+|---|---|
+| 👁️ **Knows your face** | ArcFace, a proper face-recognition model, not a "looks similar" guess. In testing, the owner scored 0.6–0.98 and other people below 0.33. |
+| ⚡ **Locks in about a second** | A stranger alone in view for 1 s locks the screen. Turning your own head away doesn't count. |
+| 🚶 **Ignores an empty room** | Leaving your desk isn't a threat. Mog only reacts to a face that isn't yours. |
+| 🤝 **You're in charge** | If you're in frame, nothing locks, even with someone looking over your shoulder. |
+| 🔴 **Warns first** | A red banner with a countdown shows on every screen before it locks. |
+| 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. Your wallpaper comes back when you unlock. |
+| 🔁 **No lock loops** | After locking, Mog switches itself off. You turn it back on; it never re-arms behind your back. |
+| 🔒 **Private by design** | No images are stored for your profile, only 512 numbers per sample. No network, no accounts, no telemetry. |
 
 ## How it works
 
-1. **Detect**: Apple Vision finds every face in the frame, with eye and mouth landmarks.
-2. **Align**: each face is rotated and scaled onto a standard 112×112 layout, so the eyes and mouth always land in the same place.
-3. **Identify**: ArcFace, a dedicated face-recognition network, turns the aligned face into 512 numbers and compares them with your enrolled samples (cosine similarity):
-   - **0.40 or higher** is you.
-   - **Below 0.33** is someone else.
-   - **In between** is "unsure" and never starts a countdown. That band covers you at awkward angles.
+```text
+camera ──► Vision finds faces ──► align to 112×112 ──► ArcFace → 512 numbers ──► you / unsure / stranger ──► guard ──► lock
+```
 
-   Live test with the owner and two friends: owner 0.40–0.98, friends −0.03–0.32.
-4. **Decide** (`Sources/MogCore/Guard.swift`):
-   - Nobody in view → nothing happens. Walking away never locks.
-   - You in view → nothing happens, even if someone is looking over your shoulder.
-   - A stranger without you, continuously for 1 s (at least 3 camera frames) → lock. One-frame flickers don't reset the countdown, and a couple of stray misreads can't lock.
-   - After locking, Mog turns itself off. You re-arm it yourself, so it can't lock you out in a loop.
+1. **Detect.** Apple Vision finds every face in the frame, with eye and mouth landmarks.
+2. **Align.** Each face is rotated and scaled onto ArcFace's standard layout, so eyes and mouth always land in the same place.
+3. **Identify.** ArcFace turns the face into 512 numbers, which Mog compares with your enrolled samples:
+   - **0.40 or higher**: you.
+   - **Below 0.33**: someone else.
+   - **In between**: unsure. This never starts a countdown, and it covers you at awkward angles.
 
-Your profile (`~/.config/mog/profile.json`, 0600) holds only the 512-number vectors, no images.
+   In a live test with the owner and two other people: owner 0.40–0.98, others −0.03 to 0.32.
+4. **Decide.** A small state machine (`Sources/MogCore/Guard.swift`) locks only when a stranger is in view without you for 1 s, across at least 3 camera frames. One-frame flickers don't reset the countdown, and a couple of stray misreads can't trigger it.
+
+## Menu bar
+
+The eye in your menu bar is the whole interface:
+
+- **Turn On / Turn Off.** It arms 3 seconds after you turn it on.
+- **Status line.** Shows what Mog sees right now: *You're here (match 0.91)*, *Nobody in view*, or *Stranger in view. Locking in 1 s*.
+- **Enroll My Face…** Opens a live camera preview. Look at the screen and move your head slightly; it takes about 10 seconds.
+- **Show Intruder Photo on Lock Screen.** Off by default. **Open Intruder Photos** browses the saved ones.
+
+The first time you turn it on, macOS asks for camera access for Mog.
+
+## Command line
+
+Everything the app does, plus diagnostics:
+
+```bash
+mog enroll          # record your face (sit alone, look at the screen)
+mog test            # dry run: prints OWNER / STRANGER 0.xx per frame, never locks
+mog watch           # guard for real; locks once, then exits
+mog watch --photo   # ...and put the intruder's photo on the lock screen
+mog status          # camera permission, lock service, model, profile
+mog probe           # 8-second camera check: detection, alignment, stability
+mog lock-test       # lock the screen in 3 s to check the lock path
+mog intruders       # list saved intruder photos
+```
+
+Tuning:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--grace S` | `1` | Seconds a stranger must stay in view before lock. |
+| `--threshold X` | `0.40` | Match score at or above which a face is you. |
+| `--stranger X` | `0.33` | Match score below which a face is a stranger. Lower means fewer false alarms but more room for a lookalike. |
+
+In the terminal, camera permission belongs to the app you run `mog` from (Terminal, iTerm, Ghostty…).
+
+## Privacy
+
+- **Your profile** is `~/.config/mog/profile.json` (0600). It holds 512 numbers per sample and no images; the numbers can't be turned back into a photo.
+- **Intruder photos** are off by default. When on, they go to `~/.config/mog/intruders/` (0700, newest 20 kept) and never leave the Mac.
+- **No network.** Mog doesn't connect to anything after the one-time model download during install.
+
+The intruder photo feature takes pictures of people without asking them. That can be illegal where you live, or against your employer's rules on a work laptop, so check before you turn it on.
+
+## Limits
+
+Mog is an extra layer, not a security boundary.
+
+- **No liveness check.** A photo or video of you held up to the camera will probably pass as you.
+- **Conditions matter.** Very dim light, strong side angles or a mask can cause misses.
+- **Lock call.** Mog uses a private macOS function (`SACLockScreenImmediate`). It's fine for a personal tool and would not pass App Store review.
+
+Keep your password, FileVault and normal auto-lock on.
 
 ## Build from source
 
 ```bash
-./Scripts/fetch-model.sh     # one-time: ~110 MB model, SHA-256 checked, compiled locally
-swift build -c release
-./Scripts/build-app.sh       # optional: .build/Mog.app with the model inside
+git clone https://github.com/c4rb0nx1/mog && cd mog
+./Scripts/fetch-model.sh     # 110 MB model, SHA-256 checked, compiled locally
+swift build -c release       # CLI: .build/release/mog
+./Scripts/build-app.sh       # app: .build/Mog.app, model included
+swift run MogChecks          # 63 checks covering lock rules, matching, alignment, storage
 ```
 
-Model: ArcFace LResNet100E-IR from the ONNX Model Zoo (Apache-2.0), in a Core ML conversion from Hugging Face `RuiSumida/ArcFace-R100-CoreML`, pinned by commit and checksum. See `NOTICE`.
+| Directory | Contents |
+|---|---|
+| `Sources/MogCore` | Pure logic: lock rules, matching, alignment math, profile storage. |
+| `Sources/MogEngine` | Camera, Vision landmarks, Core ML, screen lock, intruder photo, app installer. The CLI and the app share it. |
+| `Sources/mog` | Command-line tool. |
+| `Sources/MogBar` | Menu-bar app. |
+| `Assets` | App icon. Regenerate with `./Scripts/make-icons.sh`. |
 
-## Use
+## Credits
 
-### Menu-bar app
-
-`mog install-app` (Homebrew) or `./Scripts/build-app.sh` (from source), then open Mog.
-
-The eye icon in the menu bar is your control:
-
-- **Turn On** before you step away. The guard arms after 3 seconds. The icon fills in.
-- A stranger in view without you brings up a red banner at the top of the screen with a countdown. It clears if you come back or they leave.
-- After it locks, Mog is **off**. Turn it on again when you leave next time. It never re-arms itself.
-- **Enroll My Face…** opens a live camera window with a progress bar. It uses the same profile as the CLI.
-- **Show Intruder Photo on Lock Screen** (off by default): the frame that triggered the lock is saved and set as your wallpaper, so it's what the lock screen shows. After you unlock, your own wallpaper comes back. **Open Intruder Photos** shows the saved ones (newest 20 kept).
-
-The app asks for its own camera permission the first time. The permission is separate from your terminal's.
-
-### CLI
-
-```bash
-mog status        # camera permission, lock service, model, profile
-mog probe         # 8 s check: does it see and align your face?
-mog enroll        # sit alone, look at the screen, move your head slightly
-mog test          # dry run: logs OWNER / STRANGER 0.xx per frame, NEVER locks
-mog lock-test     # locks the screen in 3 s, checks the lock path
-mog watch         # the real thing: locks once, then exits
-mog watch --photo # same, and shows the intruder's photo on the lock screen
-mog intruders     # list saved intruder photos
-```
-
-From a source build, the binary is `.build/release/mog`.
-
-### Intruder photos
-
-They live in `~/.config/mog/intruders/` (0700, files 0600, newest 20 kept) and never leave the Mac. macOS has no public way to change only the lock-screen picture, so Mog sets the photo as the wallpaper just before locking; the lock screen uses the wallpaper. Your original is recorded in `~/.config/mog/wallpaper-backup.json` and put back after unlock, when Mog next starts, or with `mog restore-wallpaper`.
-
-It photographs whoever sits at your Mac. Taking pictures of people without their knowledge can be illegal where you live or against workplace policy, so check before turning it on, especially on a work laptop.
-
-Camera permission belongs to the app you run it from (Terminal, iTerm, Ghostty…).
-
-Tuning: `--grace 3` waits longer before locking. `--stranger 0.28` needs more certainty before calling someone a stranger, giving fewer false alarms but a lookalike could slip by. `--threshold 0.45` is stricter about who counts as you.
-
-## Limits
-
-This is not a security boundary. A photo or video of you held up to the camera will likely pass as you (no liveness check). Poor light, strong side angles, or someone wearing a mask can cause misses. Your macOS password, FileVault, and auto-lock stay your real protection. The lock call is a private macOS API (`SACLockScreenImmediate`), fine for personal use and not suitable for the App Store.
-
-## Layout
-
-- `Sources/MogCore`: pure logic (lock rules, matching, alignment math, profile). Covered by `swift run MogChecks`, 63 checks, including a replay of live test scores.
-- `Sources/MogEngine`: camera, Vision landmarks, Core ML embedding, screen lock, intruder photo, app installer, plus the watch and enroll sessions that the CLI and the app both run.
-- `Sources/mog`: CLI.
-- `Sources/MogBar`: menu-bar app.
+- Face model: [ArcFace LResNet100E-IR](https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface) from the ONNX Model Zoo, in a Core ML conversion by [RuiSumida](https://huggingface.co/RuiSumida/ArcFace-R100-CoreML). Both Apache-2.0.
 
 ## License
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Vision
 import CoreVideo
@@ -386,8 +387,12 @@ func installApp() -> Never {
     }
     do {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let r = try AppInstaller.install(bar: bar, model: model, into: dir, embedModel: flag("--embed-model"))
+        let icon = AppInstaller.locateIcon(near: exe)
+        let r = try AppInstaller.install(bar: bar, model: model, icon: icon, into: dir, embedModel: flag("--embed-model"))
+        // Nudge Finder/Dock to pick up the new icon instead of a cached blank one.
+        NSWorkspace.shared.noteFileSystemChanged(r.app.path)
         print("installed \(r.app.path)")
+        if icon == nil { print("note:     no AppIcon.icns found, installed without an icon") }
         print("model:    \(r.modelPath)")
         print("open it:  open \"\(r.app.path)\"")
     } catch { fail("\(error)") }
