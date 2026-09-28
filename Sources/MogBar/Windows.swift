@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import MogCore
 import MogEngine
 
 /// Live camera preview with progress while enrolling.
@@ -103,10 +104,11 @@ final class EnrollWindow: NSObject, NSWindowDelegate {
     }
 }
 
-/// Floating red countdown shown on every Space while a stranger is in view.
+/// Floating red countdown shown on every Space before Mog locks.
 @MainActor
 final class WarningPanel {
     private let panel: NSPanel
+    private let heading = NSTextField(labelWithString: "Someone else is looking")
     private let label = NSTextField(labelWithString: "")
 
     var isVisible: Bool { panel.isVisible }
@@ -126,7 +128,6 @@ final class WarningPanel {
         box.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.95).cgColor
         box.layer?.cornerRadius = 14
 
-        let heading = NSTextField(labelWithString: "Someone else is looking")
         heading.font = .systemFont(ofSize: 17, weight: .bold)
         heading.textColor = .white
         label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
@@ -144,7 +145,8 @@ final class WarningPanel {
         ])
     }
 
-    func show(secondsLeft: Double) {
+    func show(secondsLeft: Double, reason: WarningReason) {
+        heading.stringValue = reason == .unseenInput ? "Someone is typing while you're away" : "Someone else is looking"
         label.stringValue = String(format: "Locking in %.0f s unless you come back", secondsLeft.rounded(.up))
         guard !panel.isVisible else { return }
         if let screen = NSScreen.main?.visibleFrame {

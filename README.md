@@ -39,11 +39,13 @@ Homebrew builds Mog from source with the Command Line Tools in about a minute. I
 |---|---|
 | 👁️ **Knows your face** | ArcFace, a proper face-recognition model, not a "looks similar" guess. In testing, the owner scored 0.6–0.98 and other people below 0.33. |
 | ⚡ **Locks in about a second** | A stranger alone in view for 1 s locks the screen. Turning your own head away doesn't count. |
-| 🚶 **Ignores an empty room** | Leaving your desk isn't a threat. Mog only reacts to a face that isn't yours. |
+| 🚶 **Ignores an empty room** | Leaving your desk isn't a threat. Mog only reacts to a face that isn't yours, or to someone using the Mac while nobody's in view. |
+| ⌨️ **Catches hands, not just faces** | Someone ducks out of view and types or clicks? Once you've been gone 5 s, any key press or click with nobody in front of the camera locks the Mac. On by default; switch it off in the menu. |
 | 🤝 **You're in charge** | If you're in frame, nothing locks, even with someone looking over your shoulder. |
 | 🔴 **Warns first** | A red banner with a countdown shows on every screen before it locks. |
 | 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. Your wallpaper comes back when you unlock. |
 | 🔁 **No lock loops** | After locking, Mog switches itself off. You turn it back on; it never re-arms behind your back. |
+| 🛡️ **Only you can switch it off** | While Mog is watching, Turn Off, Quit, Re-enroll and Forget only work with you in front of the camera. Anyone else trying locks the Mac instead. |
 | 🔒 **Private by design** | No images are stored for your profile, only 512 numbers per sample. No network, no accounts, no telemetry. |
 
 ## How it works
@@ -60,16 +62,23 @@ camera ──► Vision finds faces ──► align to 112×112 ──► ArcFac
    - **In between**: unsure. This never starts a countdown, and it covers you at awkward angles.
 
    In a live test with the owner and two other people: owner 0.40–0.98, others −0.03 to 0.32.
-4. **Decide.** A small state machine (`Sources/MogCore/Guard.swift`) locks only when a stranger is in view without you for 1 s, across at least 3 camera frames. One-frame flickers don't reset the countdown, and a couple of stray misreads can't trigger it.
+4. **Decide.** A small state machine (`Sources/MogCore/Guard.swift`) starts a 1-second countdown in two cases:
+   - **A stranger** is in view without you, across at least 3 camera frames. One-frame flickers don't reset the countdown, and a couple of stray misreads can't trigger it.
+   - **Someone types or clicks with nobody in view**, once you've been gone for 5 s. Your own keystrokes right before you walk away, or while you glance down at the keyboard, don't count. Mouse movement and scrolling are ignored, so a bump or a cat can't lock you out. Mog reads only *when* the last key or click happened, never *which* key, so it needs no Input Monitoring permission.
+
+   You appearing in view cancels either countdown.
 
 ## Menu bar
 
 The eye in your menu bar is the whole interface:
 
 - **Turn On / Turn Off.** It arms 3 seconds after you turn it on.
+- **Dock icon while watching.** The Mog icon appears in the Dock whenever it's guarding. Right-click it for Turn Off and Quit, even if the menu-bar icon is hidden behind the notch.
+- **You have to be there to switch it off.** While watching, Turn Off and Quit work only if Mog has seen you in the last 2 seconds, from the menu bar, the Dock or ⌘Q. Otherwise the Mac locks instead, and Mog switches itself off as after any lock. Logging out and shutting down are never blocked.
 - **Status line.** Shows what Mog sees right now: *You're here (match 0.91)*, *Nobody in view*, or *Stranger in view. Locking in 1 s*.
 - **Enroll My Face…** Opens a live camera preview. Look at the screen and move your head slightly; it takes about 10 seconds.
 - **Show Intruder Photo on Lock Screen.** Off by default. **Open Intruder Photos** browses the saved ones.
+- **Lock on Typing When Nobody’s There.** On by default. Untick it if you often type while out of the camera's view, for example with an external keyboard and the lid closed.
 
 The first time you turn it on, macOS asks for camera access for Mog.
 
@@ -95,6 +104,7 @@ Tuning:
 | `--grace S` | `1` | Seconds a stranger must stay in view before lock. |
 | `--threshold X` | `0.40` | Match score at or above which a face is you. |
 | `--stranger X` | `0.33` | Match score below which a face is a stranger. Lower means fewer false alarms but more room for a lookalike. |
+| `--no-input-lock` | on | Don't lock on a key press or click while nobody is in view. |
 
 In the terminal, camera permission belongs to the app you run `mog` from (Terminal, iTerm, Ghostty…).
 
@@ -103,6 +113,7 @@ In the terminal, camera permission belongs to the app you run `mog` from (Termin
 - **Your profile** is `~/.config/mog/profile.json` (0600). It holds 512 numbers per sample and no images; the numbers can't be turned back into a photo.
 - **Intruder photos** are off by default. When on, they go to `~/.config/mog/intruders/` (0700, newest 20 kept) and never leave the Mac.
 - **No network.** Mog doesn't connect to anything after the one-time model download during install.
+- **No keylogging.** The typing rule reads the system's "seconds since last key press" counter. Mog never sees which keys you press.
 
 The intruder photo feature takes pictures of people without asking them. That can be illegal where you live, or against your employer's rules on a work laptop, so check before you turn it on.
 
@@ -112,6 +123,7 @@ Mog is an extra layer, not a security boundary.
 
 - **No liveness check.** A photo or video of you held up to the camera will probably pass as you.
 - **Conditions matter.** Very dim light, strong side angles or a mask can cause misses.
+- **Blind spots.** The typing rule can't tell who is typing. If you work out of the camera's view (lid closed, docked), turn it off. Someone who stays out of view and only moves the mouse won't trigger it either.
 - **Lock call.** Mog uses a private macOS function (`SACLockScreenImmediate`). It's fine for a personal tool and would not pass App Store review.
 
 Keep your password, FileVault and normal auto-lock on.
@@ -123,7 +135,7 @@ git clone https://github.com/c4rb0nx1/mog && cd mog
 ./Scripts/fetch-model.sh     # 110 MB model, SHA-256 checked, compiled locally
 swift build -c release       # CLI: .build/release/mog
 ./Scripts/build-app.sh       # app: .build/Mog.app, model included
-swift run MogChecks          # 63 checks covering lock rules, matching, alignment, storage
+swift run MogChecks          # 444 checks covering lock rules, matching, alignment, storage
 ```
 
 | Directory | Contents |

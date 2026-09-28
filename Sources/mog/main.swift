@@ -14,8 +14,8 @@ mog — lock the Mac when someone else looks at it.
 
 USAGE
   mog enroll [--samples N]        Record your face (look at the camera, move your head a little).
-  mog test   [--grace S] [--photo]      Dry run: live log of every frame. NEVER locks.
-  mog watch  [--grace S] [--photo] [-v] Guard for real. Locks once, then exits (no lock loops).
+  mog test   [--grace S] [--photo] [--no-input-lock]      Dry run: live log of every frame. NEVER locks.
+  mog watch  [--grace S] [--photo] [--no-input-lock] [-v] Guard for real. Locks once, then exits.
   mog lock-test                   Lock the screen in 3 seconds (checks the lock path).
   mog status                      Profile, model, camera, lock availability.
   mog probe                       8 s camera diagnostic: detection, alignment, embedding stability.
@@ -28,6 +28,8 @@ USAGE
 
 OPTIONS
   --grace S        Seconds a stranger must stay in view before lock (default 1).
+  --no-input-lock  Don't lock on a key press or click while nobody is in view. (That rule is on by
+                   default: once you've been gone 5 s, any key or click with no face in view locks.)
   --photo          Save the intruder's photo and show it on the lock screen (as the wallpaper).
                    Your wallpaper comes back after you unlock. In `test`, only saves the photo.
   --threshold X    Similarity at or above X counts as you (default 0.40).
@@ -55,6 +57,7 @@ func option(_ name: String) -> Double? {
 
 let verbose = flag("-v", "--verbose")
 let photoOnLock = flag("--photo")
+let inputLock = !flag("--no-input-lock")
 let graceSeconds = option("--grace") ?? 1
 let thresholdOverride = option("--threshold").map(Float.init)
 let strangerOverride = option("--stranger").map(Float.init)
@@ -164,7 +167,7 @@ func guardLoop(dryRun: Bool) -> Never {
     let (analyzer, camera) = loadEngine()
     let session = WatchSession(profile: profile, thresholds: thresholds,
                                grace: .milliseconds(Int(graceSeconds * 1000)), dryRun: dryRun,
-                               armDelay: dryRun ? 0 : 3, analyzer: analyzer, camera: camera)
+                               armDelay: dryRun ? 0 : 3, inputLock: inputLock, analyzer: analyzer, camera: camera)
     let logEveryFrame = dryRun || verbose
     session.capturePhoto = photoOnLock
     MainActor.assumeIsolated { restorePendingWallpaper() }
@@ -186,8 +189,11 @@ func guardLoop(dryRun: Bool) -> Never {
     print(dryRun
         ? "DRY RUN: will never lock. Ctrl-C to stop."
         : "WATCHING: will lock once when a stranger stays \(graceSeconds)s without you. Ctrl-C to stop.")
-    print(String(format: "profile: %d samples, you ≥ %.2f, stranger < %.2f, grace %.1fs\n",
+    print(String(format: "profile: %d samples, you ≥ %.2f, stranger < %.2f, grace %.1fs",
                  profile.samples.count, thresholds.owner, thresholds.stranger, graceSeconds))
+    print(inputLock
+        ? "input lock: on (a key or click with nobody in view, after you've been gone 5 s)\n"
+        : "input lock: off\n")
     if !dryRun { print("arming in 3 s…") }
 
     var lastState = ""
@@ -202,7 +208,9 @@ func guardLoop(dryRun: Bool) -> Never {
         case .off: stateText = "off"
         case .watching: stateText = "watching"
         case .locked: stateText = "LOCK"
-        case .warning: stateText = String(format: "WARNING lock in %.1fs", tick.secondsLeft ?? 0)
+        case .warning: stateText = String(format: "WARNING (%@) lock in %.1fs",
+                                          tick.reason == .unseenInput ? "input, nobody in view" : "stranger",
+                                          tick.secondsLeft ?? 0)
         }
         if !dryRun && !announcedArmed && tick.state != .off {
             announcedArmed = true
@@ -211,7 +219,13 @@ func guardLoop(dryRun: Bool) -> Never {
 
         switch tick.action {
         case .startWarning:
-            print("\u{7}\(stamp())  !!! STRANGER: \(faceText). Locking in \(graceSeconds)s unless you return.")
+            if tick.reason == .unseenInput {
+                let ago = InputActivity.secondsSinceLastInput
+                print("\u{7}\(stamp())  !!! INPUT WITH NOBODY IN VIEW (key/click \(String(format: "%.1f", ago))s ago). "
+                      + "Locking in \(graceSeconds)s unless you return.")
+            } else {
+                print("\u{7}\(stamp())  !!! STRANGER: \(faceText). Locking in \(graceSeconds)s unless you return.")
+            }
         case .cancelWarning:
             let ownerBack = tick.observation == .owner || tick.observation == .stranger(ownerAlsoPresent: true)
             print("\(stamp())  warning cancelled (\(ownerBack ? "owner back" : "stranger gone"))")
