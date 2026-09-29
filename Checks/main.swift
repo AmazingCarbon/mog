@@ -215,6 +215,131 @@ do {
     check(!g.ownerSeen(within: .seconds(2), at: at(1.5)), "gate: not armed → nothing to gate")
 }
 
+// MARK: Stealth — camera off until someone touches the Mac.
+
+do {
+    var g = StealthGuard()
+    check(g.poll(lastInput: at(1), at: at(2)) == .none, "stealth: unarmed ignores input")
+    check(!g.isArmed, "stealth: starts disarmed")
+    g.arm(at: at(10))
+    check(g.state == .idle && !g.isChecking, "stealth: arms with the camera off")
+    check(g.poll(lastInput: at(9), at: at(10.05)) == .none, "stealth: input from before arming ignored")
+    check(g.poll(lastInput: nil, at: at(11)) == .none, "stealth: no input, no check")
+    for s in stride(from: 11.0, through: 600, by: 0.05) {
+        if g.poll(lastInput: at(9), at: at(s)) != .none { check(false, "stealth: untouched Mac never wakes the camera") }
+    }
+    check(g.state == .idle, "stealth: 10 untouched minutes, camera still off")
+}
+do {
+    // Owner comes back and types: one check, then the camera stays off while they work.
+    var g = StealthGuard(); g.arm(at: at(0))
+    check(g.poll(lastInput: at(5), at: at(5.05)) == .startCheck, "stealth: touch starts a check")
+    check(g.isChecking, "stealth: camera on while checking")
+    check(g.observe(.empty, at: at(5.5)) == .none, "stealth: dark first frames don't lock")
+    check(g.observe(.unclear, at: at(5.8)) == .none, "stealth: unclear frames don't lock")
+    check(g.observe(.owner, at: at(6.0)) == .verified, "stealth: owner verified")
+    check(g.isTrusted && !g.isChecking, "stealth: camera off after verifying")
+    for s in stride(from: 6.05, through: 60, by: 0.05) {
+        if g.poll(lastInput: at(s - 0.02), at: at(s)) != .none { check(false, "stealth: owner typing stays trusted (t=\(s))") }
+    }
+    check(g.isTrusted, "stealth: a minute of typing, no re-check")
+    check(g.observe(stranger, at: at(30)) == .none, "stealth: frames outside a check ignored")
+}
+do {
+    // Owner leaves: trust expires, the next touch is checked again.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(1), at: at(1.05)); _ = g.observe(.owner, at: at(1.5))
+    _ = g.poll(lastInput: at(3), at: at(3.05))
+    check(g.poll(lastInput: at(3), at: at(12.9)) == .none, "stealth: trusted until 10 s untouched")
+    check(g.poll(lastInput: at(3), at: at(13.05)) == .trustExpired, "stealth: 10 s untouched ends trust")
+    check(g.state == .idle, "stealth: back to camera off")
+    check(g.poll(lastInput: at(3), at: at(20)) == .none, "stealth: old input doesn't re-trigger")
+    check(g.poll(lastInput: at(40), at: at(40.05)) == .startCheck, "stealth: next touch checked")
+    check(g.observe(stranger, at: at(41.0)) == .none, "stealth: one stranger frame not enough")
+    check(g.observe(stranger, at: at(41.03)) == .lock(.stranger), "stealth: second stranger frame locks at once")
+    check(g.state == .locked && !g.isArmed, "stealth: lock disarms")
+    check(g.poll(lastInput: at(50), at: at(50.05)) == .none, "stealth: no lock loop")
+}
+do {
+    // A pause the poll didn't see (Mac asleep): the first touch after it still gets checked.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(1), at: at(1.05)); _ = g.observe(.owner, at: at(1.5))
+    check(g.poll(lastInput: at(100), at: at(100.05)) == .startCheck, "stealth: touch after an unseen pause is checked")
+}
+do {
+    // Stranger takes over within seconds of the owner leaving: caught by the periodic re-check.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(1), at: at(1.05)); _ = g.observe(.owner, at: at(1.5))
+    var rechecked: Double?
+    for s in stride(from: 1.6, through: 400, by: 0.05) where rechecked == nil {
+        if g.poll(lastInput: at(s - 0.02), at: at(s)) == .startCheck { rechecked = s }
+    }
+    check(rechecked.map { $0 >= 301.5 && $0 < 302 } == true, "stealth: nonstop use re-checked after 5 min")
+    check(g.observe(stranger, at: at(302)) == .none && g.observe(stranger, at: at(302.05)) == .lock(.stranger),
+          "stealth: stranger who took over caught by re-check")
+}
+do {
+    // Touching out of view: nobody identifiable within 2.5 s locks.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05))
+    for s in stride(from: 5.1, to: 7.55, by: 0.05) {
+        if g.observe(s < 6 ? .empty : .unclear, at: at(s)) != .none { check(false, "stealth: no lock before timeout (t=\(s))") }
+    }
+    check(g.observe(.empty, at: at(7.55)) == .lock(.notVerified), "stealth: nobody within 2.5 s locks")
+}
+do {
+    // Camera never delivers a frame (broken, taken by another app): the poll enforces the timeout.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05))
+    check(g.poll(lastInput: at(6), at: at(7.5)) == .none, "stealth: still waiting before timeout")
+    check(g.poll(lastInput: at(6), at: at(7.6)) == .lock(.notVerified), "stealth: no frames at all still locks")
+}
+do {
+    // Stranger misread interleaved with the owner: owner wins; single misreads reset the streak.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05))
+    check(g.observe(stranger, at: at(5.5)) == .none, "stealth: misread 1")
+    check(g.observe(.unclear, at: at(5.55)) == .none, "stealth: streak broken")
+    check(g.observe(stranger, at: at(5.6)) == .none, "stealth: misread 2 alone doesn't lock")
+    check(g.observe(.owner, at: at(5.65)) == .verified, "stealth: owner wins")
+}
+do {
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05))
+    check(g.observe(strangerWithOwner, at: at(5.5)) == .verified, "stealth: owner with someone behind is verified")
+}
+do {
+    // Owner gate: verified recently → allowed without a new check; otherwise a check runs.
+    var g = StealthGuard(); g.arm(at: at(0))
+    check(!g.verified(within: .seconds(2), at: at(1)), "stealth gate: not verified yet")
+    check(g.checkNow(at: at(1)) == .startCheck, "stealth gate: check on demand")
+    check(g.checkNow(at: at(1.1)) == .none, "stealth gate: no double check")
+    _ = g.observe(.owner, at: at(1.5))
+    check(g.verified(within: .seconds(2), at: at(3)), "stealth gate: verified 1.5 s ago → allow")
+    check(!g.verified(within: .seconds(2), at: at(4)), "stealth gate: 2.5 s ago → check again")
+    check(g.checkNow(at: at(4)) == .startCheck, "stealth gate: re-check from trusted")
+    check(g.poll(lastInput: nil, at: at(6.5)) == .lock(.notVerified), "stealth gate: nobody → lock")
+}
+do {
+    // Screen locked by hand: camera off; the password typed on the lock screen doesn't wake it.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05))
+    g.pause(at: at(6))
+    check(g.state == .idle && g.isArmed, "stealth: lock screen pauses, stays armed")
+    check(g.poll(lastInput: at(5.9), at: at(20)) == .none, "stealth: typing before the pause ignored")
+    check(g.poll(lastInput: at(21), at: at(21.05)) == .startCheck, "stealth: after unlock, touch is checked")
+    g.disarm(); g.pause(at: at(30))
+    check(g.state == .off, "stealth: pause doesn't arm a disarmed guard")
+}
+do {
+    // The same input, re-derived each poll, can drift by microseconds: not a new touch.
+    var g = StealthGuard(); g.arm(at: at(0))
+    _ = g.poll(lastInput: at(5), at: at(5.05)); _ = g.observe(.owner, at: at(5.5))
+    _ = g.poll(lastInput: at(5), at: at(15.6))
+    check(g.state == .idle, "stealth jitter: trust expired")
+    check(g.poll(lastInput: at(5.001), at: at(16)) == .none, "stealth jitter: 1 ms drift is not a touch")
+}
+
 // MARK: Classifier — turning faces into an observation.
 
 let th = MatchThresholds(owner: 0.40, stranger: 0.33)

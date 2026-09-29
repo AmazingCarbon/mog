@@ -41,6 +41,7 @@ Homebrew builds Mog from source with the Command Line Tools in about a minute. I
 | ⚡ **Locks in about a second** | A stranger alone in view for 1 s locks the screen. Turning your own head away doesn't count. |
 | 🚶 **Ignores an empty room** | Leaving your desk isn't a threat. Mog only reacts to a face that isn't yours, or to someone using the Mac while nobody's in view. |
 | ⌨️ **Catches hands, not just faces** | Someone ducks out of view and types or clicks? Once you've been gone 5 s, any key press or click with nobody in front of the camera locks the Mac. On by default; switch it off in the menu. |
+| 🥷 **Stealth mode** *(optional)* | Camera off, green light off, until someone types, clicks or touches the trackpad. Then Mog takes one look: you, and the camera goes off again; anyone else, or nobody, and the Mac locks at once, no countdown. |
 | 🤝 **You're in charge** | If you're in frame, nothing locks, even with someone looking over your shoulder. |
 | 🔴 **Warns first** | A red banner with a countdown shows on every screen before it locks. |
 | 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. Your wallpaper comes back when you unlock. |
@@ -68,6 +69,20 @@ camera ──► Vision finds faces ──► align to 112×112 ──► ArcFac
 
    You appearing in view cancels either countdown.
 
+### Stealth mode
+
+The camera's green light can't be turned off: Apple wires it to the camera. Stealth mode keeps the camera off instead, until the Mac is touched.
+
+1. **Camera off.** Mog watches only the system's "last input" timers: key presses, clicks, pointer movement, scrolling, trackpad gestures.
+2. **Touch.** The camera switches on. A cold camera shows a recognizable face after about 1 second.
+3. **Verdict.**
+   - **You**: the camera goes off. You're trusted while you keep using the Mac.
+   - **Someone else**, for 2 frames in a row: the Mac locks at once.
+   - **Nobody identifiable within 2.5 s**: the Mac locks. Someone is using it out of view.
+4. **Re-check.** After 10 s untouched, the next touch is checked again. During nonstop use, Mog checks at least every 5 minutes, so someone who takes over the moment you stand up still gets caught.
+
+Trade-offs: someone who only *looks* at the screen without touching anything isn't caught. Turning Mog off also needs a quick look, so the light flashes then. And if you work out of the camera's view (lid closed, docked), every first touch locks. Don't use stealth mode that way.
+
 ## Menu bar
 
 The eye in your menu bar is the whole interface:
@@ -78,7 +93,8 @@ The eye in your menu bar is the whole interface:
 - **Status line.** Shows what Mog sees right now: *You're here (match 0.91)*, *Nobody in view*, or *Stranger in view. Locking in 1 s*.
 - **Enroll My Face…** Opens a live camera preview. Look at the screen and move your head slightly; it takes about 10 seconds.
 - **Show Intruder Photo on Lock Screen.** Off by default. **Open Intruder Photos** browses the saved ones.
-- **Lock on Typing When Nobody’s There.** On by default. Untick it if you often type while out of the camera's view, for example with an external keyboard and the lid closed.
+- **Lock on Typing When Nobody’s There.** On by default. Untick it if you often type while out of the camera's view, for example with an external keyboard and the lid closed. Stealth mode has this rule built in, so the switch is greyed out there.
+- **Stealth Mode (Camera Off Until Touched).** Off by default. The menu-bar eye shows as a circled eye while stealth is on. Changes take effect the next time you turn Mog on.
 
 The first time you turn it on, macOS asks for camera access for Mog.
 
@@ -91,6 +107,8 @@ mog enroll          # record your face (sit alone, look at the screen)
 mog test            # dry run: prints OWNER / STRANGER 0.xx per frame, never locks
 mog watch           # guard for real; locks once, then exits
 mog watch --photo   # ...and put the intruder's photo on the lock screen
+mog watch --stealth # camera off until the Mac is touched, then one look; locks at once
+mog test --stealth  # dry run of stealth: checks once at start and shows the timing
 mog status          # camera permission, lock service, model, profile
 mog probe           # 8-second camera check: detection, alignment, stability
 mog lock-test       # lock the screen in 3 s to check the lock path
@@ -105,6 +123,7 @@ Tuning:
 | `--threshold X` | `0.40` | Match score at or above which a face is you. |
 | `--stranger X` | `0.33` | Match score below which a face is a stranger. Lower means fewer false alarms but more room for a lookalike. |
 | `--no-input-lock` | on | Don't lock on a key press or click while nobody is in view. |
+| `--stealth` | off | Camera off until someone touches the Mac. `--grace` and `--no-input-lock` don't apply. |
 
 In the terminal, camera permission belongs to the app you run `mog` from (Terminal, iTerm, Ghostty…).
 

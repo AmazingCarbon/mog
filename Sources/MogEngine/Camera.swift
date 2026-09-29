@@ -58,6 +58,23 @@ public final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         onQueue { if session.isRunning { session.stopRunning() } }
     }
 
+    /// Starts or stops the camera to match `wanted()`, evaluated on the camera queue. Concurrent calls
+    /// are serialized there, and each one reads the latest state, so the last call always wins.
+    /// Safe to call from inside `onFrame`.
+    public func reconcile(_ wanted: () -> Bool) throws {
+        try Self.ensureAccess()
+        var failure: Error?
+        onQueue {
+            let on = wanted()
+            do {
+                if on && !configured { try configure(); configured = true }
+                if on && !session.isRunning { lastFrame = .distantPast; session.startRunning() }
+                if !on && session.isRunning { session.stopRunning() }
+            } catch { failure = error }
+        }
+        if let failure { throw failure }
+    }
+
     public var isRunning: Bool { session.isRunning }
 
     private func configure() throws {
