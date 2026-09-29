@@ -18,9 +18,29 @@ public enum InputActivity {
 
     /// The same, as an instant on the Guard's clock.
     public static func lastInput(now: ContinuousClock.Instant = .now) -> ContinuousClock.Instant? {
-        let s = secondsSinceLastInput
+        instant(secondsAgo: secondsSinceLastInput, now: now)
+    }
+
+    /// Every kind of touch of the keyboard, mouse or trackpad, listed explicitly rather than via
+    /// `kCGAnyInputEventType`, so the set is exactly what the docs and tests describe.
+    private static let touchTypes: [CGEventType] = types + [
+        .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel,
+    ] + [29].compactMap { CGEventType(rawValue: $0) }  // 29 = NSEventTypeGesture (trackpad pinch, swipe…)
+
+    /// Seconds since any touch of the keyboard, mouse or trackpad, including pointer movement and
+    /// scrolling. Stealth mode uses this: there, touching the trackpad is exactly what should wake
+    /// the camera.
+    public static var secondsSinceAnyInput: Double {
+        touchTypes.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? .infinity
+    }
+
+    public static func lastAnyInput(now: ContinuousClock.Instant = .now) -> ContinuousClock.Instant? {
+        instant(secondsAgo: secondsSinceAnyInput, now: now)
+    }
+
+    private static func instant(secondsAgo s: Double, now: ContinuousClock.Instant) -> ContinuousClock.Instant? {
         guard s.isFinite, s >= 0, s < 7 * 24 * 3600 else { return nil }
-        return now - .milliseconds(Int(s * 1000))
+        return now - .microseconds(Int(s * 1_000_000))
     }
 }
 
@@ -163,6 +183,226 @@ public final class WatchSession {
                           state: stateBefore, reason: reason, secondsLeft: left, locked: locked,
                           intruderJPEG: photo))
         if locked { camera.onFrame = nil }
+    }
+}
+
+/// What happened in stealth mode. Delivered on a private queue.
+public struct StealthTick {
+    public let action: StealthAction
+    /// State after this tick.
+    public let state: StealthState
+    /// Faces in the analyzed frame (empty for input-only ticks).
+    public let faces: [AnalyzedFace]
+    public let labels: [(MatchThresholds.Label, Float)?]
+    /// What the frame showed; nil for input-only ticks.
+    public let observation: Observation?
+    /// Seconds since the check began, for ticks during or ending a check.
+    public let checkElapsed: Double?
+    /// True if this tick requested the real screen lock.
+    public let locked: Bool
+    public let intruderJPEG: Data?
+}
+
+/// Stealth guard loop: camera off until someone touches the Mac, then a quick look (see `StealthGuard`).
+/// Shared by `mog watch --stealth`, `mog test --stealth` and the menu-bar app.
+public final class StealthSession {
+    public let profile: Profile
+    public let thresholds: MatchThresholds
+    public let dryRun: Bool
+    public var capturePhoto = false
+    /// Called right before the screen locks, with the photo (see WatchSession.beforeLock).
+    public var beforeLock: ((Data?) -> Void)?
+    public var onTick: ((StealthTick) -> Void)?
+
+    private let analyzer: FaceAnalyzer
+    private let camera: Camera
+    private var guardian: StealthGuard
+    private let armAt: ContinuousClock.Instant
+    private var armed = false
+    private var checkOnArm = false
+    private var finished = false
+    private var gateWaiters: [(Bool) -> Void] = []
+    /// Protects everything above; never held while calling into the camera.
+    private let lock = NSLock()
+    private let pollQueue = DispatchQueue(label: "mog.stealth", qos: .userInteractive)
+    private var timer: DispatchSourceTimer?
+
+    public init(profile: Profile, thresholds: MatchThresholds, dryRun: Bool, armDelay: TimeInterval,
+                idleAfter: Duration = StealthGuard.defaultIdleAfter,
+                checkTimeout: Duration = StealthGuard.defaultCheckTimeout,
+                analyzer: FaceAnalyzer, camera: Camera = Camera()) {
+        self.profile = profile
+        self.thresholds = thresholds
+        self.dryRun = dryRun
+        self.analyzer = analyzer
+        self.camera = camera
+        self.guardian = StealthGuard(idleAfter: idleAfter, checkTimeout: checkTimeout)
+        self.armAt = .now + .milliseconds(Int(armDelay * 1000))
+    }
+
+    public var idleAfter: Duration { guardian.idleAfter }
+    public var recheckAfter: Duration { guardian.recheckAfter }
+    public var checkTimeout: Duration { guardian.checkTimeout }
+
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock(); defer { lock.unlock() }
+        return body()
+    }
+
+    public func start() throws {
+        if !dryRun && !ScreenLock.isAvailable { throw EngineError.lockUnavailable }
+        try Camera.ensureAccess()
+        camera.interval = 0  // every frame: during a check, speed is the point
+        camera.onFrame = { [weak self] frame in self?.process(frame) }
+        let t = DispatchSource.makeTimerSource(queue: pollQueue)
+        t.schedule(deadline: .now(), repeating: .milliseconds(50), leeway: .milliseconds(10))
+        t.setEventHandler { [weak self] in self?.poll() }
+        timer = t
+        t.resume()
+    }
+
+    public func stop() {
+        timer?.cancel()
+        timer = nil
+        let waiters = locked { () -> [(Bool) -> Void] in
+            finished = true
+            guardian.disarm()
+            defer { gateWaiters = [] }
+            return gateWaiters
+        }
+        camera.stop()
+        camera.onFrame = nil
+        resolve(waiters, false)
+    }
+
+    /// Check once as soon as the guard arms, without waiting for input (`mog test --stealth`).
+    public func checkWhenArmed() { locked { checkOnArm = true } }
+
+    /// Owner gate for Turn Off / Quit / Re-enroll / Forget. `done(true)` if the camera saw the owner in
+    /// the last `ownerGateWindow`, or does now within the check timeout. Otherwise the check locks the
+    /// Mac and `done(false)`. Always called on the main queue.
+    public func verifyOwner(_ done: @escaping (Bool) -> Void) {
+        let now = ContinuousClock.now
+        let (answer, start): (Bool?, Bool) = locked {
+            if finished || !armed || !guardian.isArmed { return (true, false) }  // arming or over: nothing to guard
+            if guardian.verified(within: WatchSession.ownerGateWindow, at: now) { return (true, false) }
+            gateWaiters.append(done)
+            return (nil, guardian.checkNow(at: now) == .startCheck)
+        }
+        if let answer { return DispatchQueue.main.async { done(answer) } }
+        if start { pollQueue.async { [weak self] in self?.syncCamera() } }
+    }
+
+    // MARK: Loop
+
+    private func poll() {
+        let now = ContinuousClock.now
+        if ScreenLock.isScreenLocked {
+            // Locked by hand: camera off, and the password typed on the lock screen doesn't count.
+            let waiters = locked { () -> [(Bool) -> Void] in
+                guardian.pause(at: now)
+                defer { gateWaiters = [] }
+                return gateWaiters
+            }
+            syncCamera()
+            resolve(waiters, false)
+            return
+        }
+        let lastInput = InputActivity.lastAnyInput(now: now)
+        let (action, before, state): (StealthAction, StealthState, StealthState) = locked {
+            if finished { return (.none, guardian.state, guardian.state) }
+            if !armed && now >= armAt {
+                armed = true
+                guardian.arm(at: now)
+                if checkOnArm { return (guardian.checkNow(at: now), .idle, guardian.state) }
+                return (.none, .off, guardian.state)
+            }
+            let before = guardian.state
+            return (guardian.poll(lastInput: lastInput, at: now), before, guardian.state)
+        }
+        if before == .off && state == .idle {
+            emit(StealthTick(action: .none, state: state, faces: [], labels: [], observation: nil,
+                             checkElapsed: nil, locked: false, intruderJPEG: nil))
+        }
+        handle(action, before: before, state: state, now: now, frame: nil)
+    }
+
+    private func process(_ frame: CVPixelBuffer) {
+        if ScreenLock.isScreenLocked || !locked({ guardian.isChecking }) { return }
+        let faces = analyzer.analyze(frame)
+        let labels: [(MatchThresholds.Label, Float)?] = faces.map { f in
+            f.embedding.map { e in
+                let s = Embedding.bestMatch(e, in: profile.samples)
+                return (thresholds.label(s), s)
+            }
+        }
+        let verdicts = zip(faces, labels).map { FaceVerdict(usable: $0.usable, similarity: $1?.1) }
+        let obs = Classifier.observe(verdicts, thresholds: thresholds)
+        let now = ContinuousClock.now
+        let (action, before, state) = locked { () -> (StealthAction, StealthState, StealthState) in
+            let before = guardian.state
+            return (guardian.observe(obs, at: now), before, guardian.state)
+        }
+        handle(action, before: before, state: state, now: now, frame: frame, faces: faces, labels: labels, obs: obs)
+    }
+
+    private func handle(_ action: StealthAction, before: StealthState, state: StealthState,
+                        now: ContinuousClock.Instant, frame: CVPixelBuffer?,
+                        faces: [AnalyzedFace] = [], labels: [(MatchThresholds.Label, Float)?] = [],
+                        obs: Observation? = nil) {
+        var elapsed: Double?
+        if case .checking(let since) = before {
+            let d = (now - since).components
+            elapsed = Double(d.seconds) + Double(d.attoseconds) / 1e18
+        }
+        var didLock = false
+        var photo: Data?
+        switch action {
+        case .none:
+            if obs == nil { return }  // nothing to report between frames
+        case .startCheck, .trustExpired:
+            syncCamera()
+        case .verified:
+            syncCamera()
+            resolve(locked { defer { gateWaiters = [] }; return gateWaiters }, true)
+        case .lock:
+            syncCamera()
+            if capturePhoto, let frame { photo = WatchSession.jpeg(from: frame) }
+            let waiters = locked { () -> [(Bool) -> Void] in
+                if dryRun { guardian.arm(at: now) } else { finished = true }  // dry run: keep demonstrating
+                defer { gateWaiters = [] }
+                return gateWaiters
+            }
+            if !dryRun {
+                // `finished` stops the poll loop; stop() cancels the timer.
+                if let beforeLock {
+                    let done = DispatchSemaphore(value: 0)
+                    DispatchQueue.main.async { beforeLock(photo); done.signal() }
+                    _ = done.wait(timeout: .now() + 1.5)
+                }
+                didLock = ScreenLock.lock()
+            }
+            resolve(waiters, false)
+        }
+        emit(StealthTick(action: action, state: state, faces: faces, labels: labels, observation: obs,
+                         checkElapsed: elapsed, locked: didLock, intruderJPEG: photo))
+        if didLock { camera.onFrame = nil }
+    }
+
+    private func emit(_ tick: StealthTick) { onTick?(tick) }
+
+    /// Camera on exactly while a check runs.
+    private func syncCamera() {
+        do {
+            try camera.reconcile { [weak self] in self?.locked { self?.guardian.isChecking ?? false } ?? false }
+        } catch {
+            NSLog("Mog: camera: \(error)")
+        }
+    }
+
+    private func resolve(_ waiters: [(Bool) -> Void], _ ok: Bool) {
+        guard !waiters.isEmpty else { return }
+        DispatchQueue.main.async { waiters.forEach { $0(ok) } }
     }
 }
 
