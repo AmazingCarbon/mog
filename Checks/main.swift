@@ -376,7 +376,7 @@ do {
     let formula = """
     class Mog < Formula
       desc "Lock your Mac when someone else looks at it"
-      url "https://github.com/c4rb0nx1/mog/archive/refs/tags/v0.3.0.tar.gz"
+      url "https://github.com/AmazingCarbon/mog/archive/refs/tags/v0.3.0.tar.gz"
       sha256 "abc"
       resource "face-model" do
         url "https://huggingface.co/RuiSumida/ArcFace-R100-CoreML/resolve/b51b655/FaceEmbedding.mlpackage.tar.gz"
