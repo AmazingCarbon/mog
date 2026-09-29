@@ -14,8 +14,8 @@ mog — lock the Mac when someone else looks at it.
 
 USAGE
   mog enroll [--samples N]        Record your face (look at the camera, move your head a little).
-  mog test   [--grace S] [--photo] [--no-input-lock]      Dry run: live log of every frame. NEVER locks.
-  mog watch  [--grace S] [--photo] [--no-input-lock] [-v] Guard for real. Locks once, then exits.
+  mog test   [--grace S] [--photo] [--no-input-lock] [--stealth]      Dry run: live log. NEVER locks.
+  mog watch  [--grace S] [--photo] [--no-input-lock] [--stealth] [-v] Guard for real. Locks once, then exits.
   mog lock-test                   Lock the screen in 3 seconds (checks the lock path).
   mog status                      Profile, model, camera, lock availability.
   mog probe                       8 s camera diagnostic: detection, alignment, embedding stability.
@@ -26,12 +26,17 @@ USAGE
                                   photo works with your wallpaper (including moving/dynamic ones).
   mog install-app [--dir D]       Install the menu-bar app (Mog.app) into ~/Applications (or D).
   mog selftest                    Load the face model and run it once (no camera).
+  mog update                      Check GitHub for a newer version and upgrade with Homebrew.
   mog version                     Print the version.
 
 OPTIONS
   --grace S        Seconds a stranger must stay in view before lock (default 1).
   --no-input-lock  Don't lock on a key press or click while nobody is in view. (That rule is on by
                    default: once you've been gone 5 s, any key or click with no face in view locks.)
+  --stealth        Camera off (no green light) until someone types, clicks or touches the trackpad.
+                   Then it looks once: you → camera off again; anyone else, or nobody within
+                   2.5 s → lock at once, no countdown. After 10 s untouched, the next touch is
+                   checked again. --grace and --no-input-lock don't apply.
   --photo          Save the intruder's photo and show it on the lock screen (as the wallpaper).
                    Your wallpaper comes back after you unlock. In `test`, only saves the photo.
   --threshold X    Similarity at or above X counts as you (default 0.40).
@@ -60,6 +65,7 @@ func option(_ name: String) -> Double? {
 let verbose = flag("-v", "--verbose")
 let photoOnLock = flag("--photo")
 let inputLock = !flag("--no-input-lock")
+let stealth = flag("--stealth")
 let graceSeconds = option("--grace") ?? 1
 let thresholdOverride = option("--threshold").map(Float.init)
 let strangerOverride = option("--stranger").map(Float.init)
@@ -162,6 +168,7 @@ func enroll() -> Never {
 
 /// Shared by `test` (dry run) and `watch` (real).
 func guardLoop(dryRun: Bool) -> Never {
+    if stealth { stealthLoop(dryRun: dryRun) }
     let profile = loadProfile(required: true)!
     let thresholds = MatchThresholds(
         owner: thresholdOverride ?? profile.threshold,
@@ -260,6 +267,93 @@ func guardLoop(dryRun: Bool) -> Never {
             lastHeartbeat = Date()
         }
         lastState = stateText
+    }
+
+    onInterrupt {
+        session.stop()
+        MainActor.assumeIsolated { restorePendingWallpaper() }
+        print("\nstopped")
+    }
+    do { try session.start() } catch { fail("\(error)") }
+    dispatchMain()
+}
+
+/// `test --stealth` / `watch --stealth`: camera off until someone touches the Mac, then one quick look.
+func stealthLoop(dryRun: Bool) -> Never {
+    let profile = loadProfile(required: true)!
+    let thresholds = MatchThresholds(
+        owner: thresholdOverride ?? profile.threshold,
+        stranger: strangerOverride ?? profile.thresholds.stranger)
+    let (analyzer, camera) = loadEngine()
+    let session = StealthSession(profile: profile, thresholds: thresholds, dryRun: dryRun,
+                                 armDelay: dryRun ? 0 : 3, analyzer: analyzer, camera: camera)
+    let logEveryFrame = dryRun || verbose
+    session.capturePhoto = photoOnLock
+    MainActor.assumeIsolated { restorePendingWallpaper() }
+    if photoOnLock && !dryRun {
+        session.beforeLock = { jpeg in
+            guard let jpeg else { return }
+            MainActor.assumeIsolated {
+                do {
+                    let url = try IntruderPhoto.save(jpeg)
+                    try IntruderPhoto.showOnLockScreen(url)
+                    print("\(stamp())  intruder photo on lock screen: \(url.path)")
+                } catch {
+                    print("\(stamp())  could not set intruder photo: \(error)")
+                }
+            }
+        }
+    }
+
+    func seconds(_ d: Duration) -> Double {
+        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+    }
+    print(dryRun
+        ? "STEALTH DRY RUN: will never lock. Ctrl-C to stop."
+        : "STEALTH WATCH: camera off until someone touches the Mac. Locks once, then exits. Ctrl-C to stop.")
+    print(String(format: "profile: %d samples, you ≥ %.2f, stranger < %.2f",
+                 profile.samples.count, thresholds.owner, thresholds.stranger))
+    print(String(format: "on touch: camera on; you → camera off; stranger or nobody within %.1f s → lock. "
+                  + "Re-checks after %.0f s untouched, and at least every %.0f min.\n",
+                 seconds(session.checkTimeout), seconds(session.idleAfter), seconds(session.recheckAfter) / 60))
+    if !dryRun { print("arming in 3 s…") }
+    // Dry run: check once right away, so the timing from camera-on to verdict is visible.
+    if dryRun { session.checkWhenArmed() }
+
+    session.onTick = { tick in
+        let faceText = tick.faces.isEmpty ? "-" : tick.faces.map { describe($0, thresholds: thresholds, profile: profile) }
+            .joined(separator: ", ")
+        let took = tick.checkElapsed.map { String(format: "%.2f s", $0) } ?? "?"
+        switch tick.action {
+        case .none:
+            if tick.observation == nil {
+                print("\(stamp())  ARMED (camera off). Touch the keyboard or trackpad to trigger a check.")
+            } else if logEveryFrame {
+                print("\(stamp())    frame +\(took): \(faceText)")
+            }
+        case .startCheck:
+            print("\(stamp())  touch → camera on, checking…")
+        case .verified:
+            print("\(stamp())  OWNER after \(took) (\(faceText)) → camera off")
+        case .trustExpired:
+            print("\(stamp())  untouched \(Int(seconds(session.idleAfter))) s → next touch will be checked")
+        case .lock(let reason):
+            let why = reason == .stranger ? "STRANGER (\(faceText))" : "NOT YOU within \(took) (last frame: \(faceText))"
+            if dryRun {
+                print("\u{7}\(stamp())  >>> WOULD LOCK NOW: \(why). Dry run, re-arming.")
+                if let jpeg = tick.intruderJPEG, let url = try? IntruderPhoto.save(jpeg) {
+                    print("\(stamp())  intruder photo saved: \(url.path)")
+                }
+            } else {
+                print("\(stamp())  >>> \(tick.locked ? "LOCKED" : "LOCK CALL FAILED"): \(why)")
+                print("Mog is now off. Run `mog watch --stealth` again to re-arm.")
+                if IntruderPhoto.needsRestore {
+                    DispatchQueue.main.async { waitForUnlockThenRestore(exitCode: tick.locked ? 0 : 1) }
+                    return
+                }
+                exit(tick.locked ? 0 : 1)
+            }
+        }
     }
 
     onInterrupt {
@@ -415,6 +509,48 @@ func installApp() -> Never {
     exit(0)
 }
 
+/// `mog update`: check, then run Homebrew in this terminal and reinstall the app.
+func update() -> Never {
+    print("checking \(UpdateChecker.formulaURL.host ?? "GitHub") for the latest version…")
+    switch UpdateChecker.checkNow() {
+    case .failure(let error):
+        fail("\(error)")
+    case .success(.upToDate(let current)):
+        print("mog \(current) is the latest version")
+        exit(0)
+    case .success(.available(let latest, let current)):
+        print("mog \(latest) is available (you have \(current)). Upgrading with Homebrew…\n")
+        guard let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            .first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            fail("Homebrew not found. Get the latest version from https://github.com/c4rb0nx1/mog")
+        }
+        func run(_ args: [String]) -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: brew)
+            p.arguments = args
+            do { try p.run() } catch { return 127 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        _ = run(["update", "--quiet"])
+        let status = run(["upgrade", UpdateChecker.formulaName])
+        guard status == 0 else { fail("brew upgrade failed (exit \(status))") }
+        let prefix = URL(fileURLWithPath: brew).deletingLastPathComponent().deletingLastPathComponent()
+        let app = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Mog.app")
+        if FileManager.default.fileExists(atPath: app.path) {
+            print("\nreinstalling Mog.app…")
+            let p = Process()
+            p.executableURL = prefix.appendingPathComponent("bin/mog")
+            p.arguments = ["install-app"]
+            try? p.run()
+            p.waitUntilExit()
+            if p.terminationStatus != 0 { fail("mog install-app failed") }
+        }
+        print("\nupdated to mog \(latest). If Mog.app was running, quit and reopen it.")
+        exit(0)
+    }
+}
+
 func selftest() -> Never {
     do {
         let embedder = try FaceEmbedder()
@@ -426,6 +562,7 @@ func selftest() -> Never {
 
 switch command {
 case "version", "--version": print("mog \(MogInfo.version)")
+case "update": update()
 case "selftest": selftest()
 case "install-app": installApp()
 case "compile-model":
