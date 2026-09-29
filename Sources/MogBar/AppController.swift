@@ -73,8 +73,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in [toggleItem, enrollItem, forgetItem, inputItem, stealthItem, photoItem, intrudersItem, updateItem] {
             item.target = self
         }
-        inputItem.toolTip = "A key press or click while nobody is in front of the camera locks the Mac, "
-            + "once you've been away for 5 seconds."
+        inputItem.toolTip = "Any key press, click or trackpad touch while nobody is in front of the camera "
+            + "locks the Mac at once."
         stealthItem.toolTip = "The camera (and its green light) stays off until someone types, clicks or touches "
             + "the trackpad. Then Mog looks once: you → camera off; anyone else, or nobody, → locks at once."
         menu.autoenablesItems = false
@@ -329,7 +329,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch tick.action {
         case .lock:
             warning.hide()
-            stopWatching(reason: tick.locked ? "Locked the screen. Off." : "Lock failed. Off.")
+            let why = tick.reason == .unseenInput ? "Touched with nobody in view" : "Stranger in view"
+            stopWatching(reason: tick.locked ? "\(why). Locked. Off." : "Lock failed. Off.")
             if !tick.locked { alert("Mog could not lock the screen", "The macOS lock call failed.") }
             return
         case .cancelWarning:

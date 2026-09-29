@@ -74,6 +74,15 @@ public final class WatchSession {
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85])
     }
 
+    /// The intruder photo: biggest non-owner face sharp, the rest blurred. No non-owner face (an
+    /// empty frame, say), or the cut-out takes longer than 0.6 s: the plain frame.
+    static func intruderJPEG(_ frame: CVPixelBuffer, faces: [AnalyzedFace],
+                             labels: [(MatchThresholds.Label, Float)?]) -> Data? {
+        let isOwner = faces.indices.map { labels.indices.contains($0) && labels[$0]?.0 == .owner }
+        guard let i = Spotlight.pick(faces.map(\.box), isOwner: isOwner) else { return jpeg(from: frame) }
+        return Spotlight.jpeg(from: frame, keeping: faces[i].box, timeout: 0.6) ?? jpeg(from: frame)
+    }
+
     public let profile: Profile
     public let thresholds: MatchThresholds
     public let dryRun: Bool
@@ -128,6 +137,7 @@ public final class WatchSession {
 
     public func start() throws {
         if !dryRun && !ScreenLock.isAvailable { throw EngineError.lockUnavailable }
+        if capturePhoto { Spotlight.prewarm() }
         camera.onFrame = { [weak self] frame in self?.process(frame) }
         try camera.start()
     }
@@ -138,8 +148,13 @@ public final class WatchSession {
     }
 
     private func process(_ frame: CVPixelBuffer) {
-        // Never analyze behind the lock screen: no camera decisions, no re-locking.
-        if ScreenLock.isScreenLocked { return }
+        // Never analyze behind the lock screen: no camera decisions, no re-locking. And the password
+        // typed there must not count as someone touching the Mac once it's unlocked.
+        if ScreenLock.isScreenLocked {
+            let now = ContinuousClock.now
+            queue.sync { guardian.ignoreInput(upTo: now) }
+            return
+        }
 
         let faces = analyzer.analyze(frame)
         let labels: [(MatchThresholds.Label, Float)?] = faces.map { f in
@@ -151,7 +166,8 @@ public final class WatchSession {
         let verdicts = zip(faces, labels).map { FaceVerdict(usable: $0.usable, similarity: $1?.1) }
         let obs = Classifier.observe(verdicts, thresholds: thresholds)
         let now = ContinuousClock.now
-        let lastInput = guardian.inputLock ? InputActivity.lastInput(now: now) : nil
+        // Any touch counts: keys, clicks, pointer movement, scrolling, trackpad gestures.
+        let lastInput = guardian.inputLock ? InputActivity.lastAnyInput(now: now) : nil
         let (action, stateBefore, reason, remaining): (GuardAction, GuardState, WarningReason?, Duration?) = queue.sync {
             if guardian.state == .off && Date() >= armAt { guardian.arm(at: now) }
             let a = guardian.observe(obs, at: now, lastInput: lastInput)
@@ -164,7 +180,7 @@ public final class WatchSession {
         var locked = false
         var photo: Data?
         if action == .lock {
-            if capturePhoto { photo = Self.jpeg(from: frame) }
+            if capturePhoto { photo = Self.intruderJPEG(frame, faces: faces, labels: labels) }
             if dryRun {
                 queue.sync { guardian.arm(at: .now) }  // keep demonstrating; nothing is locked
             } else {
@@ -252,6 +268,7 @@ public final class StealthSession {
     public func start() throws {
         if !dryRun && !ScreenLock.isAvailable { throw EngineError.lockUnavailable }
         try Camera.ensureAccess()
+        if capturePhoto { Spotlight.prewarm() }
         camera.interval = 0  // every frame: during a check, speed is the point
         camera.onFrame = { [weak self] frame in self?.process(frame) }
         let t = DispatchSource.makeTimerSource(queue: pollQueue)
@@ -367,7 +384,7 @@ public final class StealthSession {
             resolve(locked { defer { gateWaiters = [] }; return gateWaiters }, true)
         case .lock:
             syncCamera()
-            if capturePhoto, let frame { photo = WatchSession.jpeg(from: frame) }
+            if capturePhoto, let frame { photo = WatchSession.intruderJPEG(frame, faces: faces, labels: labels) }
             let waiters = locked { () -> [(Bool) -> Void] in
                 if dryRun { guardian.arm(at: now) } else { finished = true }  // dry run: keep demonstrating
                 defer { gateWaiters = [] }
