@@ -63,9 +63,10 @@ public enum Spotlight {
         // Core Image's origin is bottom-left; the face box is top-left.
         let faceCI = CGRect(x: face.minX, y: extent.height - face.maxY, width: face.width, height: face.height)
         let blurred = image.clampedToExtent()
-            .applyingGaussianBlur(sigma: max(12, Double(extent.width) / 60))
+            // Subtle: background still recognisable, the kept person clearly stands out.
+            .applyingGaussianBlur(sigma: max(5, Double(extent.width) / 180))
             .cropped(to: extent)
-            .applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: -0.08])
+            .applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: -0.03])
         let mask = personMask(frame: frame, face: faceCI, extent: extent) ?? ovalMask(around: faceCI, extent: extent)
         return image.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: blurred,

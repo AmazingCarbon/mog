@@ -271,6 +271,7 @@ public final class StealthSession {
         if capturePhoto { Spotlight.prewarm() }
         camera.interval = 0  // every frame: during a check, speed is the point
         camera.onFrame = { [weak self] frame in self?.process(frame) }
+        prewarmAnalyzer()
         let t = DispatchSource.makeTimerSource(queue: pollQueue)
         t.schedule(deadline: .now(), repeating: .milliseconds(50), leeway: .milliseconds(10))
         t.setEventHandler { [weak self] in self?.poll() }
@@ -407,6 +408,13 @@ public final class StealthSession {
     }
 
     private func emit(_ tick: StealthTick) { onTick?(tick) }
+
+    /// The first face analysis in a process is slow (Vision's detector loads, Core ML runs cold): ~3.4 s
+    /// in a live test, longer than the 2.5 s check, so the very first check could lock the owner out.
+    /// Warm it up now, before any check can start; the arm delay covers the time.
+    private func prewarmAnalyzer() {
+        analyzer.prewarm()
+    }
 
     /// Camera on exactly while a check runs.
     private func syncCamera() {

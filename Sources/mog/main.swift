@@ -35,8 +35,8 @@ OPTIONS
                    view. (On by default: any touch with no face in view locks at once, no countdown.)
   --stealth        Camera off (no green light) until someone types, clicks or touches the trackpad.
                    Then it looks once: you → camera off again; anyone else, or nobody within
-                   2.5 s → lock at once, no countdown. After 10 s untouched, the next touch is
-                   checked again. --grace and --no-input-lock don't apply.
+                   2.5 s → lock at once, no countdown. After 3 s untouched, the next touch is
+                   checked again (and at least once a minute). --grace and --no-input-lock don't apply.
   --photo          Save the intruder's photo and show it on the lock screen (as the wallpaper).
                    Your wallpaper comes back after you unlock. In `test`, only saves the photo.
   --threshold X    Similarity at or above X counts as you (default 0.40).
