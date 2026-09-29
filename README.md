@@ -40,11 +40,11 @@ Homebrew builds Mog from source with the Command Line Tools in about a minute. I
 | 👁️ **Knows your face** | ArcFace, a proper face-recognition model, not a "looks similar" guess. In testing, the owner scored 0.6–0.98 and other people below 0.33. |
 | ⚡ **Locks in about a second** | A stranger alone in view for 1 s locks the screen. Turning your own head away doesn't count. |
 | 🚶 **Ignores an empty room** | Leaving your desk isn't a threat. Mog only reacts to a face that isn't yours, or to someone using the Mac while nobody's in view. |
-| ⌨️ **Catches hands, not just faces** | Someone ducks out of view and types or clicks? Once you've been gone 5 s, any key press or click with nobody in front of the camera locks the Mac. On by default; switch it off in the menu. |
+| ⌨️ **Catches hands, not just faces** | Someone ducks out of view and types, clicks or touches the trackpad? With nobody in front of the camera, any touch locks the Mac at once, no countdown. On by default; switch it off in the menu. |
 | 🥷 **Stealth mode** *(optional)* | Camera off, green light off, until someone types, clicks or touches the trackpad. Then Mog takes one look: you, and the camera goes off again; anyone else, or nobody, and the Mac locks at once, no countdown. |
 | 🤝 **You're in charge** | If you're in frame, nothing locks, even with someone looking over your shoulder. |
-| 🔴 **Warns first** | A red banner with a countdown shows on every screen before it locks. |
-| 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. Your wallpaper comes back when you unlock. |
+| 🔴 **Warns first** | For a stranger in view, a red banner with a countdown shows on every screen before it locks. A touch with nobody in view locks at once, no warning. |
+| 📸 **Intruder photo** *(optional)* | The face that triggered the lock becomes your lock-screen background. The biggest face that isn't yours, usually the person nearest the screen, stays sharp; everyone else and the room are blurred. Your wallpaper comes back when you unlock. |
 | 🔁 **No lock loops** | After locking, Mog switches itself off. You turn it back on; it never re-arms behind your back. |
 | 🛡️ **Only you can switch it off** | While Mog is watching, Turn Off, Quit, Re-enroll and Forget only work with you in front of the camera. Anyone else trying locks the Mac instead. |
 | 🔒 **Private by design** | No images are stored for your profile, only 512 numbers per sample. No network, no accounts, no telemetry. |
@@ -63,11 +63,9 @@ camera ──► Vision finds faces ──► align to 112×112 ──► ArcFac
    - **In between**: unsure. This never starts a countdown, and it covers you at awkward angles.
 
    In a live test with the owner and two other people: owner 0.40–0.98, others −0.03 to 0.32.
-4. **Decide.** A small state machine (`Sources/MogCore/Guard.swift`) starts a 1-second countdown in two cases:
-   - **A stranger** is in view without you, across at least 3 camera frames. One-frame flickers don't reset the countdown, and a couple of stray misreads can't trigger it.
-   - **Someone types or clicks with nobody in view**, once you've been gone for 5 s. Your own keystrokes right before you walk away, or while you glance down at the keyboard, don't count. Mouse movement and scrolling are ignored, so a bump or a cat can't lock you out. Mog reads only *when* the last key or click happened, never *which* key, so it needs no Input Monitoring permission.
-
-   You appearing in view cancels either countdown.
+4. **Decide.** A small state machine (`Sources/MogCore/Guard.swift`) locks in two cases:
+   - **A stranger** is in view without you, across at least 3 camera frames: a 1-second countdown, then lock. One-frame flickers don't reset the countdown, and a couple of stray misreads can't trigger it. You appearing in view cancels it.
+   - **Someone types, clicks or touches the trackpad with nobody in view**: lock at once, on the next camera frame (about 0.25 s). Only touches made after the last frame that showed any face count, so typing while you're in view never locks. But if you look away from the camera, or duck out of view, and touch the Mac, it locks, you included. Mog reads only *when* the last input happened, never *which* key, so it needs no Input Monitoring permission.
 
 ### Stealth mode
 
@@ -125,7 +123,7 @@ Tuning:
 | `--grace S` | `1` | Seconds a stranger must stay in view before lock. |
 | `--threshold X` | `0.40` | Match score at or above which a face is you. |
 | `--stranger X` | `0.33` | Match score below which a face is a stranger. Lower means fewer false alarms but more room for a lookalike. |
-| `--no-input-lock` | on | Don't lock on a key press or click while nobody is in view. |
+| `--no-input-lock` | on | Don't lock on a key press, click or trackpad touch while nobody is in view. |
 | `--stealth` | off | Camera off until someone touches the Mac. `--grace` and `--no-input-lock` don't apply. |
 
 In the terminal, camera permission belongs to the app you run `mog` from (Terminal, iTerm, Ghostty…).
@@ -145,7 +143,7 @@ Mog is an extra layer, not a security boundary.
 
 - **No liveness check.** A photo or video of you held up to the camera will probably pass as you.
 - **Conditions matter.** Very dim light, strong side angles or a mask can cause misses.
-- **Blind spots.** The typing rule can't tell who is typing. If you work out of the camera's view (lid closed, docked), turn it off. Someone who stays out of view and only moves the mouse won't trigger it either.
+- **Blind spots.** The typing rule can't tell who is typing. It locks on any touch the camera doesn't see a face for, so if you often look away while typing, or work out of the camera's view (lid closed, docked), turn it off.
 - **Lock call.** Mog uses a private macOS function (`SACLockScreenImmediate`). It's fine for a personal tool and would not pass App Store review.
 
 Keep your password, FileVault and normal auto-lock on.

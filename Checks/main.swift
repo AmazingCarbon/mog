@@ -129,67 +129,69 @@ do {
 }
 do {
     var g = ownerLeftAt1s()
-    check(g.observe(.empty, at: at(20), lastInput: at(19.9)) == .startWarning, "input: key press in an empty room warns")
-    check(g.warningReason == .unseenInput, "input: warning says why")
-    check(g.observe(.empty, at: at(20.5)) == .none, "input: no lock before grace")
-    check(g.observe(.empty, at: at(21), lastInput: at(19.9)) == .lock, "input: locks after 1 s")
-    check(g.state == .locked, "input: lock disarms")
+    check(g.observe(.empty, at: at(20), lastInput: at(19.9)) == .lock, "input: touch in an empty room locks at once")
+    check(g.warningReason == .unseenInput, "input: lock says why")
+    check(g.state == .locked && !g.isArmed, "input: lock disarms")
+    check(g.observe(.empty, at: at(30), lastInput: at(29.9)) == .none, "input: no lock loop")
 }
 do {
-    // Owner typing, then walking away: the last keystrokes are within 5 s of being seen.
+    // No 5 s wait any more: touching the Mac right after the owner's face leaves the frame locks.
     var g = ownerLeftAt1s()
-    for s in stride(from: 1.5, through: 60, by: 0.25) {
-        check(g.observe(.empty, at: at(s), lastInput: at(4.9)) == .none, "input: owner's typing while leaving never locks (t=\(s))")
-    }
+    check(g.observe(.empty, at: at(1.75), lastInput: at(1.6)) == .lock, "input: touch 0.1 s after the face left locks")
 }
 do {
-    var g = ownerLeftAt1s()
-    check(g.observe(.empty, at: at(6.5), lastInput: at(6.0)) == .startWarning, "input: first key 5 s after owner left warns")
-}
-do {
-    // Owner glancing down at the keyboard: face gone for a moment while typing.
+    // No need to have seen the owner first: armed while away, a touch with nobody in view locks.
     var g = Guard(inputLock: true); g.arm(at: at(0))
-    for s in stride(from: 0.25, through: 30, by: 0.25) {
-        let obs: Observation = Int(s * 4) % 12 < 8 ? .owner : .empty   // 2 s of face, 1 s looking down
-        check(g.observe(obs, at: at(s), lastInput: at(s - 0.1)) != .startWarning,
-              "input: owner looking down while typing never warns (t=\(s))")
-    }
+    check(g.observe(.empty, at: at(10), lastInput: at(9)) == .lock, "input: owner never seen, touch still locks")
 }
 do {
-    // Input from before arming (e.g. the click on Turn On) never counts.
-    var g = Guard(inputLock: true); g.arm(at: at(10))
+    // Typing while in view never counts, even when the next frame misses the face.
+    var g = Guard(inputLock: true); g.arm(at: at(0))
     _ = g.observe(.owner, at: at(1))
-    check(g.observe(.empty, at: at(20), lastInput: at(9)) == .none, "input: keys before arming ignored")
+    check(g.observe(.empty, at: at(1.25), lastInput: at(0.95)) == .none, "input: key made while the face was in view ignored")
+    check(g.observe(.empty, at: at(1.5), lastInput: at(0.95)) == .none, "input: still ignored on later empty frames")
 }
 do {
-    // Never saw the owner this session (armed while away): Mog can't tell whose hands those are.
+    // Owner looking down at the keyboard and typing: this now locks (option b, by request).
     var g = Guard(inputLock: true); g.arm(at: at(0))
-    check(g.observe(.empty, at: at(10), lastInput: at(9)) == .none, "input: needs to have seen the owner first")
+    _ = g.observe(.owner, at: at(1))
+    check(g.observe(.empty, at: at(1.5), lastInput: at(1.4)) == .lock, "input: face gone + key press locks, even the owner's")
+}
+do {
+    // Input from before arming (the click on Turn On) never counts.
+    var g = Guard(inputLock: true); g.arm(at: at(10))
+    check(g.observe(.empty, at: at(20), lastInput: at(9.99)) == .none, "input: touches before arming ignored")
+    check(g.observe(.empty, at: at(20.25), lastInput: at(10.03)) == .none, "input: within jitter of arming ignored")
 }
 do {
     var g = ownerLeftAt1s()
     check(g.observe(.unclear, at: at(20), lastInput: at(19.9)) == .none, "input: unclear face is not 'nobody'")
-    check(g.observe(stranger, at: at(20.25), lastInput: at(19.9)) == .startWarning, "input: stranger still handled by face rule")
-    check(g.warningReason == .stranger, "input: stranger reason wins when a face is visible")
+    check(g.observe(.empty, at: at(20.25), lastInput: at(19.9)) == .none, "input: key made while a face was in view ignored")
+    check(g.observe(.empty, at: at(21), lastInput: at(20.9)) == .lock, "input: next touch with nobody in view locks")
+}
+do {
+    // A stranger ducks out of view mid-countdown and types: locks at once, not after the countdown.
+    var g = ownerLeftAt1s()
+    check(g.observe(stranger, at: at(20)) == .startWarning, "input: stranger warning starts")
+    check(g.observe(.empty, at: at(20.25), lastInput: at(20.2)) == .lock, "input: stranger vanished + touch locks at once")
+    check(g.warningReason == .unseenInput, "input: reason is the touch")
+}
+do {
+    // The password typed on the lock screen doesn't count after unlocking.
+    var g = ownerLeftAt1s()
+    g.ignoreInput(upTo: at(30))
+    check(g.observe(.empty, at: at(31), lastInput: at(29.5)) == .none, "input: lock-screen typing ignored after unlock")
+    check(g.observe(.empty, at: at(40), lastInput: at(39.9)) == .lock, "input: later touch still locks")
+}
+do {
+    // The same event, re-derived each frame, drifts by microseconds: never a new touch.
+    var g = Guard(inputLock: true); g.arm(at: at(0))
+    _ = g.observe(.owner, at: at(5))
+    check(g.observe(.empty, at: at(5.25), lastInput: at(4.99)) == .none, "input jitter: key at 4.99 during face")
+    check(g.observe(.empty, at: at(5.5), lastInput: at(4.991)) == .none, "input jitter: same key 1 ms later is not new")
 }
 do {
     var g = ownerLeftAt1s()
-    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
-    check(g.observe(.owner, at: at(20.5), lastInput: at(19.9)) == .cancelWarning, "input: owner coming back cancels")
-    check(g.observe(.empty, at: at(21), lastInput: at(19.9)) == .none, "input: same key press can't warn twice")
-    check(g.observe(.empty, at: at(23), lastInput: at(22.5)) == .none, "input: owner seen 2 s ago, fresh typing is theirs")
-    check(g.observe(.empty, at: at(40), lastInput: at(39)) == .startWarning, "input: later key press warns again")
-}
-do {
-    // Warning from input keeps running even if the room stays empty (the input was the evidence).
-    var g = ownerLeftAt1s()
-    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
-    check(g.observe(.unclear, at: at(20.5)) == .none, "input: unclear frame doesn't cancel input warning")
-    check(g.observe(.empty, at: at(21)) == .lock, "input: empty room still locks")
-}
-do {
-    var g = ownerLeftAt1s()
-    _ = g.observe(.empty, at: at(20), lastInput: at(19.9))
     g.disarm()
     check(g.observe(.empty, at: at(30), lastInput: at(29.9)) == .none, "input: disarm stops it")
 }

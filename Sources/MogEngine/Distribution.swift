@@ -3,7 +3,7 @@ import CoreVideo
 import Foundation
 
 public enum MogInfo {
-    public static let version = "0.3.0"
+    public static let version = "0.4.0"
     public static let bundleID = "io.github.c4rb0nx1.mog"
 }
 

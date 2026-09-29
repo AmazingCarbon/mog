@@ -48,21 +48,22 @@ public enum WarningReason: Equatable, Sendable {
 ///   so a stranger cannot defeat it by turning their head for one frame.
 /// - It also takes at least `minStrangerFrames` stranger frames. With a short grace (1 s ≈ 4
 ///   frames) that stops a couple of stray misreads, plus the gap tolerance, from locking.
-/// - Unseen input (`inputLock`): a key press or click while nobody is in view starts the same
-///   countdown, but only if the owner was seen since the session started and not for
-///   `ownerAbsence` before that input. So the owner's own typing just before walking away, or
-///   while looking down at the keyboard for a moment, never counts. Only an empty frame counts;
-///   an unclear face is someone, not nobody. The owner appearing cancels it.
+/// - Unseen input (`inputLock`): a key press, click, pointer movement, scroll or trackpad gesture
+///   while nobody is in view locks at once, no countdown. It counts only if it came after arming and
+///   after the last frame that showed any face, so typing while you're in view never counts, even if
+///   the next frame misses you. Only an empty frame counts; an unclear face is someone, not nobody.
+///   Input made behind the lock screen (the password) never counts (`ignoreInput(upTo:)`).
 /// - After `lock`, the guard disarms itself. The caller must re-arm explicitly.
 public struct Guard: Sendable {
     public static let defaultGrace: Duration = .seconds(1)
-    public static let defaultOwnerAbsence: Duration = .seconds(5)
+    /// The input clock is re-derived from "seconds since last event" on every frame, so one event can
+    /// appear to move by microseconds between frames. Anything this close is the same event.
+    public static let inputJitter: Duration = .milliseconds(50)
 
     public let grace: Duration
     public let toleratedGap: Duration
     public let minStrangerFrames: Int
     public let inputLock: Bool
-    public let ownerAbsence: Duration
 
     public private(set) var state: GuardState = .off
     public private(set) var warningReason: WarningReason?
@@ -71,18 +72,18 @@ public struct Guard: Sendable {
     private var armedAt: ContinuousClock.Instant?
     /// Last time the owner was in frame, in this session (kept across re-arming, cleared by disarm).
     private var lastOwnerAt: ContinuousClock.Instant?
-    /// The input that started the last unseen-input warning; it can't start another.
+    /// Last frame that showed any face at all (owner, stranger or unclear).
+    private var lastFaceAt: ContinuousClock.Instant?
+    /// Input at or before this instant has been accounted for and can't lock.
     private var lastHandledInput: ContinuousClock.Instant?
 
     public init(grace: Duration = Guard.defaultGrace, toleratedGap: Duration = .milliseconds(1500),
-                minStrangerFrames: Int = 3, inputLock: Bool = false,
-                ownerAbsence: Duration = Guard.defaultOwnerAbsence) {
+                minStrangerFrames: Int = 3, inputLock: Bool = false) {
         self.grace = grace
         // A gap longer than the countdown itself would let empty frames carry a warning to lock.
         self.toleratedGap = min(toleratedGap, max(grace, .milliseconds(500)))
         self.minStrangerFrames = max(1, minStrangerFrames)
         self.inputLock = inputLock
-        self.ownerAbsence = ownerAbsence
     }
 
     public var isArmed: Bool {
@@ -108,7 +109,14 @@ public struct Guard: Sendable {
         strangerFrames = 0
         armedAt = nil
         lastOwnerAt = nil
+        lastFaceAt = nil
         lastHandledInput = nil
+    }
+
+    /// Input up to `now` never locks: call while the lock screen is up, so the password typed there
+    /// doesn't count once the Mac is unlocked.
+    public mutating func ignoreInput(upTo now: ContinuousClock.Instant) {
+        lastHandledInput = max(lastHandledInput ?? now, now)
     }
 
     /// Seconds left before lock, while warning.
@@ -117,11 +125,12 @@ public struct Guard: Sendable {
         return max(.zero, grace - (now - since))
     }
 
-    /// - Parameter lastInput: when the last key press or mouse click happened, if known.
+    /// - Parameter lastInput: when the last key press, click, pointer movement or scroll happened, if known.
     public mutating func observe(_ obs: Observation, at now: ContinuousClock.Instant,
                                  lastInput: ContinuousClock.Instant? = nil) -> GuardAction {
         let ownerInFrame = obs == .owner || obs == .stranger(ownerAlsoPresent: true)
         if ownerInFrame { lastOwnerAt = now }
+        if obs != .empty { lastFaceAt = now }
 
         switch state {
         case .off, .locked:
@@ -135,21 +144,10 @@ public struct Guard: Sendable {
                 strangerFrames = 1
                 return .startWarning
             }
-            if let input = unseenInput(obs, lastInput: lastInput) {
-                lastHandledInput = input
-                state = .warning(since: now)
-                warningReason = .unseenInput
-                return .startWarning
-            }
+            if let input = unseenInput(obs, lastInput: lastInput) { return lockForInput(input) }
             return .none
 
         case .warning(let since):
-            if warningReason == .unseenInput {
-                // The input itself is the evidence. Only the owner showing up clears it.
-                if ownerInFrame { return cancel() }
-                if now - since >= grace { return lock() }
-                return .none
-            }
             switch obs {
             case .owner, .stranger(ownerAlsoPresent: true):
                 return cancel()
@@ -163,6 +161,8 @@ public struct Guard: Sendable {
                 return .none
 
             case .empty, .unclear:
+                // The stranger ducked out of view and touched the Mac: that's unseen input.
+                if let input = unseenInput(obs, lastInput: lastInput) { return lockForInput(input) }
                 // Tolerate short gaps; a real departure cancels the warning.
                 if let last = lastStrangerAt, now - last <= toleratedGap {
                     return .none
@@ -180,10 +180,18 @@ public struct Guard: Sendable {
 
     /// The pending input, if it counts as someone using the Mac while nobody is in view.
     private func unseenInput(_ obs: Observation, lastInput: ContinuousClock.Instant?) -> ContinuousClock.Instant? {
-        guard inputLock, obs == .empty, let input = lastInput, let armedAt, input > armedAt,
-              let ownerAt = lastOwnerAt, input - ownerAt >= ownerAbsence else { return nil }
-        if let handled = lastHandledInput, input <= handled + .milliseconds(100) { return nil }
+        guard inputLock, obs == .empty, let input = lastInput, let armedAt,
+              input > armedAt + Self.inputJitter else { return nil }
+        // Made while a face was in view (the frame that showed it came after the input).
+        if let face = lastFaceAt, input <= face { return nil }
+        if let handled = lastHandledInput, input <= handled + Self.inputJitter { return nil }
         return input
+    }
+
+    private mutating func lockForInput(_ input: ContinuousClock.Instant) -> GuardAction {
+        lastHandledInput = input
+        warningReason = .unseenInput
+        return lock()
     }
 
     private mutating func cancel() -> GuardAction {
