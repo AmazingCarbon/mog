@@ -114,6 +114,7 @@ mog status          # camera permission, lock service, model, profile
 mog probe           # 8-second camera check: detection, alignment, stability
 mog lock-test       # lock the screen in 3 s to check the lock path
 mog intruders       # list saved intruder photos
+mog wallpaper-check # swap in a test picture for 3 s and put your wallpaper back
 mog update          # check for a newer version and upgrade with Homebrew
 ```
 
@@ -132,7 +133,7 @@ In the terminal, camera permission belongs to the app you run `mog` from (Termin
 ## Privacy
 
 - **Your profile** is `~/.config/mog/profile.json` (0600). It holds 512 numbers per sample and no images; the numbers can't be turned back into a photo.
-- **Intruder photos** are off by default. When on, they go to `~/.config/mog/intruders/` (0700, newest 20 kept) and never leave the Mac.
+- **Intruder photos** are off by default. When on, they go to `~/.config/mog/intruders/` (0700, newest 20 kept) and never leave the Mac. Before swapping in the photo, Mog copies macOS's wallpaper settings, so moving and dynamic wallpapers come back exactly after you unlock.
 - **No network.** Mog doesn't connect to anything after the one-time model download during install, except when you click **Check for Updates…** (or run `mog update`). That reads one small file, the Homebrew formula on GitHub, and sends nothing but the request itself.
 - **No keylogging.** The typing rule reads the system's "seconds since last key press" counter. Mog never sees which keys you press.
 
