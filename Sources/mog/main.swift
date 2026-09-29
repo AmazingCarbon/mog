@@ -22,6 +22,8 @@ USAGE
   mog forget                      Delete your enrolled face profile.
   mog intruders                   List saved intruder photos.
   mog restore-wallpaper           Put your original wallpaper back (if a swap is pending).
+  mog wallpaper-check             Swap in a test picture for 3 s and restore it: checks the intruder
+                                  photo works with your wallpaper (including moving/dynamic ones).
   mog install-app [--dir D]       Install the menu-bar app (Mog.app) into ~/Applications (or D).
   mog selftest                    Load the face model and run it once (no camera).
   mog version                     Print the version.
@@ -450,6 +452,27 @@ case "restore-wallpaper":
     MainActor.assumeIsolated {
         if !IntruderPhoto.needsRestore { print("nothing to restore") }
         else { print(IntruderPhoto.restoreWallpaper() ? "wallpaper restored" : "could not restore wallpaper") }
+    }
+case "wallpaper-check":
+    MainActor.assumeIsolated {
+        if IntruderPhoto.needsRestore { fail("a swap is already pending. Run `mog restore-wallpaper` first.") }
+        // A plain generated picture, saved like a real intruder photo so the restore logic sees it the same way.
+        let size = CGSize(width: 64, height: 64)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.systemRed.setFill(); rect.fill(); return true
+        }
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [:]) else { fail("could not make test picture") }
+        do {
+            let url = try IntruderPhoto.save(jpeg)
+            try IntruderPhoto.showOnLockScreen(url)
+            print("swapped in a red test picture; restoring in 3 s…")
+            RunLoop.current.run(until: Date().addingTimeInterval(3))
+            let ok = IntruderPhoto.restoreWallpaper()
+            try? FileManager.default.removeItem(at: url)
+            print(ok ? "ok: your wallpaper is back" : "FAILED: run `mog restore-wallpaper`, or pick it again in System Settings")
+            exit(ok ? 0 : 1)
+        } catch { fail("\(error)") }
     }
 case "help", "-h", "--help": print(usage)
 default: fail("unknown command '\(command)'\n\n\(usage)")
