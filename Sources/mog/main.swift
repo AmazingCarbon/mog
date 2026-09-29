@@ -24,6 +24,7 @@ USAGE
   mog restore-wallpaper           Put your original wallpaper back (if a swap is pending).
   mog install-app [--dir D]       Install the menu-bar app (Mog.app) into ~/Applications (or D).
   mog selftest                    Load the face model and run it once (no camera).
+  mog update                      Check GitHub for a newer version and upgrade with Homebrew.
   mog version                     Print the version.
 
 OPTIONS
@@ -506,6 +507,48 @@ func installApp() -> Never {
     exit(0)
 }
 
+/// `mog update`: check, then run Homebrew in this terminal and reinstall the app.
+func update() -> Never {
+    print("checking \(UpdateChecker.formulaURL.host ?? "GitHub") for the latest version…")
+    switch UpdateChecker.checkNow() {
+    case .failure(let error):
+        fail("\(error)")
+    case .success(.upToDate(let current)):
+        print("mog \(current) is the latest version")
+        exit(0)
+    case .success(.available(let latest, let current)):
+        print("mog \(latest) is available (you have \(current)). Upgrading with Homebrew…\n")
+        guard let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            .first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            fail("Homebrew not found. Get the latest version from https://github.com/c4rb0nx1/mog")
+        }
+        func run(_ args: [String]) -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: brew)
+            p.arguments = args
+            do { try p.run() } catch { return 127 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        _ = run(["update", "--quiet"])
+        let status = run(["upgrade", UpdateChecker.formulaName])
+        guard status == 0 else { fail("brew upgrade failed (exit \(status))") }
+        let prefix = URL(fileURLWithPath: brew).deletingLastPathComponent().deletingLastPathComponent()
+        let app = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Mog.app")
+        if FileManager.default.fileExists(atPath: app.path) {
+            print("\nreinstalling Mog.app…")
+            let p = Process()
+            p.executableURL = prefix.appendingPathComponent("bin/mog")
+            p.arguments = ["install-app"]
+            try? p.run()
+            p.waitUntilExit()
+            if p.terminationStatus != 0 { fail("mog install-app failed") }
+        }
+        print("\nupdated to mog \(latest). If Mog.app was running, quit and reopen it.")
+        exit(0)
+    }
+}
+
 func selftest() -> Never {
     do {
         let embedder = try FaceEmbedder()
@@ -517,6 +560,7 @@ func selftest() -> Never {
 
 switch command {
 case "version", "--version": print("mog \(MogInfo.version)")
+case "update": update()
 case "selftest": selftest()
 case "install-app": installApp()
 case "compile-model":

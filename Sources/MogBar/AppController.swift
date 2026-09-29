@@ -23,6 +23,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                          keyEquivalent: "")
     private let intrudersItem = NSMenuItem(title: "Open Intruder Photos", action: #selector(openIntruders),
                                            keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates),
+                                        keyEquivalent: "")
+    /// Set once a check finds a newer version; the menu item then offers to install it.
+    private var availableUpdate: String?
+    private var checkingForUpdates = false
     private static let photoDefaultsKey = "showIntruderPhoto"
     private static let inputDefaultsKey = "lockOnUnseenInput"
     private static let stealthDefaultsKey = "stealthMode"
@@ -65,7 +70,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
         for item in [statusLine, detailLine] { item.isEnabled = false }
-        for item in [toggleItem, enrollItem, forgetItem, inputItem, stealthItem, photoItem, intrudersItem] {
+        for item in [toggleItem, enrollItem, forgetItem, inputItem, stealthItem, photoItem, intrudersItem, updateItem] {
             item.target = self
         }
         inputItem.toolTip = "A key press or click while nobody is in front of the camera locks the Mac, "
@@ -79,7 +84,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             toggleItem, .separator(),
             stealthItem, inputItem, photoItem, intrudersItem, .separator(),
             enrollItem, forgetItem, .separator(),
-            quitItem,
+            updateItem, quitItem,
         ]
         statusItem.menu = menu
         quitItem.target = self
@@ -228,6 +233,76 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stealthMode.toggle()
         if guarding { lastDetail = "Turn Mog off and on for this to take effect" }
         refresh()
+    }
+
+    // MARK: Updates
+
+    /// Checks GitHub for a newer Homebrew release, only when clicked. If one is waiting from an earlier
+    /// check, offers to install it instead.
+    @objc private func checkForUpdates() {
+        if let latest = availableUpdate { return offerUpdate(latest) }
+        guard !checkingForUpdates else { return }
+        checkingForUpdates = true
+        refresh()
+        UpdateChecker.check { [weak self] result in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.checkingForUpdates = false
+                switch result {
+                case .success(.available(let latest, _)):
+                    self.availableUpdate = latest
+                    self.refresh()
+                    self.offerUpdate(latest)
+                case .success(.upToDate(let current)):
+                    self.refresh()
+                    self.alert("Mog is up to date", "You have the latest version, \(current).")
+                case .failure(let error):
+                    self.refresh()
+                    self.alert("Couldn't check for updates", "Mog \(error).")
+                }
+            }
+        }
+    }
+
+    private func offerUpdate(_ latest: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Mog \(latest) is available"
+        a.informativeText = "You have \(MogInfo.version). Updating opens Terminal and runs Homebrew there "
+            + "(it builds from source, about a minute). Mog quits for the update and reopens when it's done."
+        a.addButton(withTitle: "Update in Terminal")
+        a.addButton(withTitle: "Later")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        // Updating quits Mog: while guarding, that needs the owner, like any other quit.
+        withOwner { [weak self] in self?.runUpdate() }
+    }
+
+    private func runUpdate() {
+        let appDir = Bundle.main.bundleURL.deletingLastPathComponent()
+        do {
+            let script = try UpdateChecker.makeUpdateScript(appDirectory: appDir)
+            guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+                return alert("Terminal not found", "Run this instead:\n\nbrew upgrade \(UpdateChecker.formulaName) && mog install-app")
+            }
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([script], withApplicationAt: terminal, configuration: config) { [weak self] _, error in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if let error {
+                            self?.alert("Couldn't open Terminal", "\(error.localizedDescription)")
+                            return
+                        }
+                        // Quit so the reinstall can replace Mog.app; the script reopens it.
+                        self?.stopWatching(reason: "Updating…")
+                        self?.quitApproved = true
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        } catch {
+            alert("Couldn't start the update", "\(error)")
+        }
     }
 
     @objc private func openIntruders() {
@@ -445,6 +520,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inputItem.isEnabled = !stealthMode
         stealthItem.state = stealthMode ? .on : .off
         intrudersItem.isHidden = IntruderPhoto.all().isEmpty
+        updateItem.title = checkingForUpdates ? "Checking for Updates…"
+            : availableUpdate.map { "Update Available: \($0)…" } ?? "Check for Updates…"
+        updateItem.isEnabled = !checkingForUpdates && enrollSession == nil
     }
 
     private func alert(_ title: String, _ text: String) {

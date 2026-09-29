@@ -340,6 +340,33 @@ do {
     check(g.poll(lastInput: at(5.001), at: at(16)) == .none, "stealth jitter: 1 ms drift is not a touch")
 }
 
+// MARK: Update check — reading the formula and comparing versions.
+
+do {
+    let formula = """
+    class Mog < Formula
+      desc "Lock your Mac when someone else looks at it"
+      url "https://github.com/c4rb0nx1/mog/archive/refs/tags/v0.3.0.tar.gz"
+      sha256 "abc"
+      resource "face-model" do
+        url "https://huggingface.co/RuiSumida/ArcFace-R100-CoreML/resolve/b51b655/FaceEmbedding.mlpackage.tar.gz"
+      end
+    end
+    """
+    check(UpdateInfo.version(inFormula: formula) == "0.3.0", "update: version read from formula url")
+    check(UpdateInfo.version(inFormula: "url \"https://x/refs/tags/v1.10.2.tar.gz\"") == "1.10.2", "update: multi-digit version")
+    check(UpdateInfo.version(inFormula: "class Mog < Formula\nend") == nil, "update: no url, no version")
+    check(UpdateInfo.version(inFormula: "url \"https://x/refs/tags/vbeta.tar.gz\"") == nil, "update: junk tag ignored")
+    check(UpdateInfo.version(inFormula: "<html>404</html>") == nil, "update: error page is not a version")
+    check(UpdateInfo.isNewer("0.3.0", than: "0.2.0"), "update: 0.3.0 > 0.2.0")
+    check(UpdateInfo.isNewer("0.10.0", than: "0.9.0"), "update: numeric, not text, compare")
+    check(UpdateInfo.isNewer("1.0", than: "0.99.9"), "update: major wins")
+    check(!UpdateInfo.isNewer("0.3.0", than: "0.3.0"), "update: same version is not newer")
+    check(!UpdateInfo.isNewer("0.3", than: "0.3.0"), "update: 0.3 == 0.3.0")
+    check(!UpdateInfo.isNewer("0.2.0", than: "0.3.0"), "update: older is not newer (local build ahead of tap)")
+    check(!UpdateInfo.isNewer("garbage", than: "0.3.0"), "update: unparsable is never newer")
+}
+
 // MARK: Classifier — turning faces into an observation.
 
 let th = MatchThresholds(owner: 0.40, stranger: 0.33)
