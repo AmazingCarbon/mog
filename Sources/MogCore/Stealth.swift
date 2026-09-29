@@ -38,8 +38,11 @@ public enum StealthAction: Equatable, Sendable {
 }
 
 public struct StealthGuard: Sendable {
-    public static let defaultIdleAfter: Duration = .seconds(10)
-    public static let defaultRecheckAfter: Duration = .seconds(300)
+    /// Short on purpose: someone who reaches the Mac within this long of the owner's last touch
+    /// inherits the owner's trust. 10 s let a quick takeover through; 3 s is about the fastest a
+    /// person can step in. The cost: resuming after a 3 s pause flashes the camera for a check.
+    public static let defaultIdleAfter: Duration = .seconds(3)
+    public static let defaultRecheckAfter: Duration = .seconds(60)
     public static let defaultCheckTimeout: Duration = .milliseconds(2500)
     /// The input clock is derived from "seconds since last event" each poll, so the same event can
     /// appear to move by a few microseconds between polls. Anything within this window is the same event.

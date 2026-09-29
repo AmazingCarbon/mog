@@ -34,6 +34,19 @@ public final class FaceAnalyzer {
         self.embedder = embedder
     }
 
+    /// Loads Vision's landmark detector and runs the face model once, so the first real frame is fast.
+    /// Cold, the first analysis of a face took ~3.4 s in a live test; warm, ~0.1 s.
+    public func prewarm() {
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 640, 480, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &pb)
+        if let pb {
+            let request = VNDetectFaceLandmarksRequest()
+            try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up, options: [:]).perform([request])
+        }
+        _ = try? embedder.selfTest()
+    }
+
     public func analyze(_ frame: CVPixelBuffer) -> [AnalyzedFace] {
         let request = VNDetectFaceLandmarksRequest()
         // Mac cameras deliver upright, unmirrored landscape frames.

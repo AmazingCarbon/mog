@@ -77,7 +77,7 @@ The camera's green light can't be turned off: Apple wires it to the camera. Stea
    - **You**: the camera goes off. You're trusted while you keep using the Mac.
    - **Someone else**, for 2 frames in a row: the Mac locks at once.
    - **Nobody identifiable within 2.5 s**: the Mac locks. Someone is using it out of view.
-4. **Re-check.** After 10 s untouched, the next touch is checked again. During nonstop use, Mog checks at least every 5 minutes, so someone who takes over the moment you stand up still gets caught.
+4. **Re-check.** After 3 s untouched, the next touch is checked again, so someone who sits down after you leave gets checked, not trusted. During nonstop use, Mog also checks at least once a minute, which catches someone who takes over the moment you stand up. Each check is a brief camera flash.
 
 Trade-offs: someone who only *looks* at the screen without touching anything isn't caught. Turning Mog off also needs a quick look, so the light flashes then. And if you work out of the camera's view (lid closed, docked), every first touch locks. Don't use stealth mode that way.
 
