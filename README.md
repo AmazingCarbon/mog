@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/c4rb0nx1/mog/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/c4rb0nx1/mog?label=version&color=2e5d52"></a>
+  <a href="https://github.com/AmazingCarbon/mog/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/AmazingCarbon/mog?label=version&color=2e5d52"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-2e5d52">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-native-2e5d52">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2e5d52"></a>
@@ -25,6 +25,7 @@ Just walking away doesn't lock anything. It only kicks in when someone who isn't
 ## Install
 
 ```bash
+brew tap c4rb0nx1/tap https://github.com/AmazingCarbon/homebrew-tap
 brew install c4rb0nx1/tap/mog
 mog install-app
 ```
@@ -163,7 +164,7 @@ Keep your password, FileVault and normal auto-lock turned on.
 ## Build it yourself
 
 ```bash
-git clone https://github.com/c4rb0nx1/mog && cd mog
+git clone https://github.com/AmazingCarbon/mog && cd mog
 ./Scripts/fetch-model.sh     # downloads the 110 MB model, checks it, compiles it
 swift build -c release       # the CLI: .build/release/mog
 ./Scripts/build-app.sh       # the app: .build/Mog.app, model included

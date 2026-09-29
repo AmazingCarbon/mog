@@ -519,7 +519,7 @@ func update() -> Never {
         print("mog \(latest) is available (you have \(current)). Upgrading with Homebrew…\n")
         guard let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
             .first(where: FileManager.default.isExecutableFile(atPath:)) else {
-            fail("Homebrew not found. Get the latest version from https://github.com/c4rb0nx1/mog")
+            fail("Homebrew not found. Get the latest version from https://github.com/AmazingCarbon/mog")
         }
         func run(_ args: [String]) -> Int32 {
             let p = Process()

@@ -5,7 +5,7 @@ import MogCore
 /// version with this build. Nothing else is sent or received; runs only when asked.
 public enum UpdateChecker {
     /// The formula `brew upgrade` installs from. Served by GitHub's raw CDN (cached up to 5 min).
-    public static let formulaURL = URL(string: "https://raw.githubusercontent.com/c4rb0nx1/homebrew-tap/main/Formula/mog.rb")!
+    public static let formulaURL = URL(string: "https://raw.githubusercontent.com/AmazingCarbon/homebrew-tap/main/Formula/mog.rb")!
     public static let formulaName = "c4rb0nx1/tap/mog"
 
     public enum Outcome: Equatable {
@@ -84,7 +84,7 @@ public enum UpdateChecker {
         for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && BREW="$b" && break; done
         if [ -z "$BREW" ]; then
           echo "Homebrew isn't installed, so Mog can't update itself."
-          echo "Get the latest version from https://github.com/c4rb0nx1/mog"
+          echo "Get the latest version from https://github.com/AmazingCarbon/mog"
           open "$APP_DIR/Mog.app"
           exit 1
         fi
